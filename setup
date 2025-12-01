@@ -91,13 +91,16 @@ echo -e "${GREEN}[+] Storage ready!${NC}"
 echo ""
 
 # ==================== Install Frida Tools ====================
-echo -e "${BLUE}[Step 5/7]${NC} Installing latest Frida tools..."
-pip install --upgrade pip
-pip install --upgrade frida frida-tools
+echo -e "${BLUE}[Step 5/7]${NC} Skipping Frida client install on Termux..."
+# ไม่ต้องอัปเดต pip ใน Termux เดี๋ยวมันงอแง
+# pip install --upgrade pip
+# pip install --upgrade frida frida-tools
 
-FRIDA_VER=$(frida --version)
+# เซ็ตเวอร์ชัน Frida เอง (แก้เลขเวอร์ชันได้ตามใจ)
+FRIDA_VER="17.5.1"
+
 echo ""
-echo -e "${GREEN}[+] Frida tools version: $FRIDA_VER${NC}"
+echo -e "${GREEN}[+] Using Frida version: $FRIDA_VER${NC}"
 echo ""
 
 # ==================== Download Frida Server ====================
