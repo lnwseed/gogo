@@ -1,54 +1,290 @@
-#!/usr/bin/env bash
-if ! command -v termux-setup-storage &>/dev/null; then
-  echo "This script can be executed only on Termux"
-  exit 1
-fi
+#!/data/data/com.termux/files/usr/bin/bash
+# =====================================================
+# Frida Auto Setup Script for Termux
+# อัพเดท Termux + ติดตั้ง Frida ล่าสุด + ตรวจสอบรุ่นมือถือ
+# 
+# วิธีใช้: chmod 777 setup.sh && ./setup.sh
+# =====================================================
+
+clear
+echo "╔═══════════════════════════════════════════════════════════╗"
+echo "║         Frida Auto Setup for Termux                       ║"
+echo "║         Auto detect device & install latest version       ║"
+echo "╚═══════════════════════════════════════════════════════════╝"
+echo ""
+
+# Colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+# ==================== Device Info ====================
+echo -e "${BLUE}[Step 1/7]${NC} Detecting device info..."
+echo ""
+
+DEVICE_MODEL=$(getprop ro.product.model)
+DEVICE_BRAND=$(getprop ro.product.brand)
+ANDROID_VER=$(getprop ro.build.version.release)
+SDK_VER=$(getprop ro.build.version.sdk)
+CPU_ABI=$(getprop ro.product.cpu.abi)
+CPU_ABI_LIST=$(getprop ro.product.cpu.abilist)
+
+echo "┌─────────────────────────────────────────────────┐"
+echo "│ 📱 Device Information                           │"
+echo "├─────────────────────────────────────────────────┤"
+echo "│ Brand      : $DEVICE_BRAND"
+echo "│ Model      : $DEVICE_MODEL"
+echo "│ Android    : $ANDROID_VER (SDK $SDK_VER)"
+echo "│ CPU ABI    : $CPU_ABI"
+echo "│ Supported  : $CPU_ABI_LIST"
+echo "└─────────────────────────────────────────────────┘"
+echo ""
 
 # Detect architecture
-case "$(uname -m)" in
-    aarch64)
-        arch="arm64"
+case "$CPU_ABI" in
+    "arm64-v8a")
+        FRIDA_ARCH="arm64"
+        ARCH_BITS="64-bit"
         ;;
-    armv7l | armv8l)
-        arch="arm"
+    "armeabi-v7a")
+        FRIDA_ARCH="arm"
+        ARCH_BITS="32-bit"
         ;;
-    x86_64)
-        arch="x86_64"
+    "x86_64")
+        FRIDA_ARCH="x86_64"
+        ARCH_BITS="64-bit"
         ;;
-    x86)
-        arch="x86"
+    "x86")
+        FRIDA_ARCH="x86"
+        ARCH_BITS="32-bit"
         ;;
     *)
-        echo "System architecture not recognized: $(uname -m)"
+        echo -e "${RED}[!] Unknown architecture: $CPU_ABI${NC}"
         exit 1
         ;;
 esac
 
-cd $TMPDIR
+echo -e "${GREEN}[+] Detected: $ARCH_BITS ($FRIDA_ARCH)${NC}"
+echo ""
 
-# Update and install required packages
-apt update && pkg upgrade -y
-pkg i -y python git curl && pip install -U setuptools
+# ==================== Update Termux ====================
+echo -e "${BLUE}[Step 2/7]${NC} Updating Termux packages..."
+pkg update -y && pkg upgrade -y
+echo -e "${GREEN}[+] Termux updated!${NC}"
+echo ""
 
-# Fetch latest Frida version
-FRIDA_VERSION=$(curl -s https://api.github.com/repos/Alexjr2/Frida_Termux_Installation/releases/latest | grep -oP '"tag_name":\s*"\K[^"]+')
+# ==================== Install Dependencies ====================
+echo -e "${BLUE}[Step 3/7]${NC} Installing dependencies..."
+pkg install -y python wget curl xz-utils tsu
+echo -e "${GREEN}[+] Dependencies installed!${NC}"
+echo ""
 
-# Download Frida devkit
-DEVKIT_URL="https://github.com/Alexjr2/Frida_Termux_Installation/releases/latest/download/frida-core-devkit-android-$arch.tar.xz"
-DEVKIT_FILE="frida-core-devkit-android-$arch.tar.xz"
+# ==================== Setup Storage ====================
+echo -e "${BLUE}[Step 4/7]${NC} Setting up storage access..."
+if [ ! -d ~/storage ]; then
+    termux-setup-storage
+    sleep 2
+fi
+echo -e "${GREEN}[+] Storage ready!${NC}"
+echo ""
 
-curl -L -o "$DEVKIT_FILE" "$DEVKIT_URL"
+# ==================== Install Frida Tools ====================
+echo -e "${BLUE}[Step 5/7]${NC} Installing latest Frida tools..."
+pip install --upgrade pip
+pip install --upgrade frida frida-tools
 
-# Extract devkit
-mkdir -p devkit && tar -xJvf "$DEVKIT_FILE" -C devkit
+FRIDA_VER=$(frida --version)
+echo ""
+echo -e "${GREEN}[+] Frida tools version: $FRIDA_VER${NC}"
+echo ""
 
-# Clone and install Frida Python
-git clone -b 17.2.14 --depth 1 https://github.com/frida/frida-python.git
+# ==================== Download Frida Server ====================
+echo -e "${BLUE}[Step 6/7]${NC} Downloading frida-server $FRIDA_VER for $FRIDA_ARCH..."
 
-# fix setup.py
-cd frida-python
-curl -LO https://raw.githubusercontent.com/Alexjr2/Frida_Termux_Installation/refs/heads/main/frida-python.patch
-patch -p1 < frida-python.patch
+FRIDA_SERVER_NAME="frida-server-${FRIDA_VER}-android-${FRIDA_ARCH}"
+DOWNLOAD_URL="https://github.com/frida/frida/releases/download/${FRIDA_VER}/${FRIDA_SERVER_NAME}.xz"
 
-#install frida-python
-FRIDA_VERSION="$FRIDA_VERSION" FRIDA_CORE_DEVKIT="$PWD/../devkit" pip install --force-reinstall .
+echo "[*] URL: $DOWNLOAD_URL"
+echo ""
+
+cd ~
+rm -f frida-server.xz frida-server 2>/dev/null
+
+# Download
+if command -v curl &> /dev/null; then
+    curl -L -o frida-server.xz "$DOWNLOAD_URL" --progress-bar
+else
+    wget -O frida-server.xz "$DOWNLOAD_URL"
+fi
+
+if [ ! -f frida-server.xz ]; then
+    echo -e "${RED}[!] Download failed!${NC}"
+    exit 1
+fi
+
+# Extract
+echo "[*] Extracting..."
+xz -d -f frida-server.xz
+
+if [ ! -f frida-server ]; then
+    echo -e "${RED}[!] Extract failed!${NC}"
+    exit 1
+fi
+
+echo -e "${GREEN}[+] Downloaded successfully!${NC}"
+echo ""
+
+# ==================== Install Frida Server ====================
+echo -e "${BLUE}[Step 7/7]${NC} Installing frida-server..."
+echo ""
+
+# Test root access
+ROOT_CMD=""
+
+echo "[*] Testing root access..."
+
+# Test tsu
+if command -v tsu &> /dev/null; then
+    if tsu -c 'id' 2>/dev/null | grep -q "uid=0"; then
+        ROOT_CMD="tsu -c"
+        echo -e "${GREEN}[+] Root: tsu${NC}"
+    fi
+fi
+
+# Test su -c
+if [ -z "$ROOT_CMD" ]; then
+    if su -c 'id' 2>/dev/null | grep -q "uid=0"; then
+        ROOT_CMD="su -c"
+        echo -e "${GREEN}[+] Root: su -c${NC}"
+    fi
+fi
+
+# Test su 0
+if [ -z "$ROOT_CMD" ]; then
+    if echo "id" | su 2>/dev/null | grep -q "uid=0"; then
+        ROOT_CMD="su -c"
+        echo -e "${GREEN}[+] Root: su${NC}"
+    fi
+fi
+
+if [ -z "$ROOT_CMD" ]; then
+    echo -e "${YELLOW}[!] Root not available. Manual installation required.${NC}"
+    echo ""
+    echo "วิธีติดตั้ง frida-server แบบ manual:"
+    echo ""
+    echo "1. เปิด Magisk > Superuser > ให้สิทธิ์ Termux"
+    echo ""
+    echo "2. รันคำสั่ง:"
+    echo "   su"
+    echo "   cp ~/frida-server /data/local/tmp/"
+    echo "   chmod 755 /data/local/tmp/frida-server"
+    echo ""
+else
+    # Install with root
+    $ROOT_CMD 'pkill -9 frida-server' 2>/dev/null
+    $ROOT_CMD "cp $HOME/frida-server /data/local/tmp/frida-server"
+    $ROOT_CMD 'chmod 755 /data/local/tmp/frida-server'
+    
+    # Verify
+    SERVER_VER=$($ROOT_CMD '/data/local/tmp/frida-server --version' 2>/dev/null)
+    
+    if [ -n "$SERVER_VER" ]; then
+        echo -e "${GREEN}[+] frida-server installed: $SERVER_VER${NC}"
+    else
+        echo -e "${YELLOW}[!] Could not verify installation${NC}"
+    fi
+fi
+
+# ==================== Create Helper Scripts ====================
+echo ""
+echo "[*] Creating helper scripts..."
+
+# start_frida.sh
+cat > ~/start_frida.sh << 'EOF'
+#!/data/data/com.termux/files/usr/bin/bash
+echo "[*] Starting frida-server..."
+
+# Kill existing
+tsu -c 'pkill -9 frida-server' 2>/dev/null || su -c 'pkill -9 frida-server' 2>/dev/null
+sleep 1
+
+# Disable SELinux
+tsu -c 'setenforce 0' 2>/dev/null || su -c 'setenforce 0' 2>/dev/null
+
+# Start server
+tsu -c '/data/local/tmp/frida-server -l 0.0.0.0:27042 -D' 2>/dev/null || \
+su -c '/data/local/tmp/frida-server -l 0.0.0.0:27042 -D' 2>/dev/null &
+
+sleep 2
+
+# Test
+if frida-ps -H 127.0.0.1:27042 &>/dev/null; then
+    echo "[+] frida-server is running!"
+    echo ""
+    echo "ทดสอบ: frida-ps -H 127.0.0.1:27042"
+else
+    echo "[-] Failed to start. Check root permission."
+fi
+EOF
+chmod 755 ~/start_frida.sh
+
+# hook.sh
+cat > ~/hook.sh << 'EOF'
+#!/data/data/com.termux/files/usr/bin/bash
+if [ -z "$1" ]; then
+    echo "Usage: ./hook.sh <package_name> [script.js]"
+    echo ""
+    echo "Examples:"
+    echo "  ./hook.sh com.example.app"
+    echo "  ./hook.sh com.example.app myscript.js"
+    exit 1
+fi
+
+PKG="$1"
+SCRIPT="$2"
+
+if [ -n "$SCRIPT" ]; then
+    frida -H 127.0.0.1:27042 -f "$PKG" -l "$SCRIPT" --no-pause
+else
+    frida -H 127.0.0.1:27042 -f "$PKG" --no-pause
+fi
+EOF
+chmod 755 ~/hook.sh
+
+echo -e "${GREEN}[+] Helper scripts created!${NC}"
+
+# ==================== Summary ====================
+echo ""
+echo "╔═══════════════════════════════════════════════════════════╗"
+echo "║                 ✅ Setup Complete!                        ║"
+echo "╚═══════════════════════════════════════════════════════════╝"
+echo ""
+echo "┌─────────────────────────────────────────────────┐"
+echo "│ 📋 Summary                                      │"
+echo "├─────────────────────────────────────────────────┤"
+echo "│ Device     : $DEVICE_BRAND $DEVICE_MODEL"
+echo "│ Android    : $ANDROID_VER ($ARCH_BITS)"
+echo "│ Frida      : $FRIDA_VER"
+echo "│ Arch       : $FRIDA_ARCH"
+echo "└─────────────────────────────────────────────────┘"
+echo ""
+echo "┌─────────────────────────────────────────────────┐"
+echo "│ 🚀 วิธีใช้งาน                                    │"
+echo "├─────────────────────────────────────────────────┤"
+echo "│                                                 │"
+echo "│ 1. Start frida-server:                          │"
+echo "│    ~/start_frida.sh                             │"
+echo "│                                                 │"
+echo "│ 2. ทดสอบ:                                        │"
+echo "│    frida-ps -H 127.0.0.1:27042                  │"
+echo "│                                                 │"
+echo "│ 3. Hook แอป:                                     │"
+echo "│    ~/hook.sh com.example.app script.js          │"
+echo "│                                                 │"
+echo "│    หรือ:                                         │"
+echo "│    frida -H 127.0.0.1:27042 -f <pkg> -l <js>    │"
+echo "│                                                 │"
+echo "└─────────────────────────────────────────────────┘"
+echo ""
