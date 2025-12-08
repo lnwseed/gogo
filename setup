@@ -250,9 +250,9 @@ PKG="$1"
 SCRIPT="$2"
 
 if [ -n "$SCRIPT" ]; then
-    frida -H 127.0.0.1:27042 -f "$PKG" -l "$SCRIPT" --no-pause
+    frida -H 127.0.0.1:27042 -f "$PKG" -l "$SCRIPT"
 else
-    frida -H 127.0.0.1:27042 -f "$PKG" --no-pause
+    frida -H 127.0.0.1:27042 -f "$PKG"
 fi
 EOF
 chmod 755 ~/hook.sh
