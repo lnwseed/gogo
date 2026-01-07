@@ -362,6 +362,15 @@ if [ "$SELINUX_STATUS" = "Enforcing" ]; then
     $ROOT_CMD 'setenforce 0' 2>/dev/null
 fi
 
+# Disable Phantom Process Killer (Android 12+)
+SDK_VER=$(getprop ro.build.version.sdk)
+if [ "$SDK_VER" -ge 31 ]; then
+    echo -e "${BLUE}[*]${NC} Disabling Phantom Process Killer (Android 12+)..."
+    $ROOT_CMD 'settings put global settings_enable_monitor_phantom_procs false' 2>/dev/null
+    $ROOT_CMD 'device_config put activity_manager max_phantom_processes 2147483647' 2>/dev/null
+    sleep 1
+fi
+
 # Check if frida-server exists
 if ! $ROOT_CMD 'test -f /data/local/tmp/frida-server' 2>/dev/null; then
     echo -e "${RED}[-]${NC} frida-server not found in /data/local/tmp/"
