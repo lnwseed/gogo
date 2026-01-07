@@ -353,7 +353,7 @@ fi
 echo -e "${BLUE}[*]${NC} Killing old frida-server processes..."
 $ROOT_CMD 'pkill -9 frida-server' 2>/dev/null
 $ROOT_CMD 'killall -9 frida-server' 2>/dev/null
-sleep 1
+sleep 2
 
 # Check SELinux
 SELINUX_STATUS=$($ROOT_CMD 'getenforce' 2>/dev/null)
@@ -376,49 +376,87 @@ if [ "$PERMS" != "755" ]; then
     $ROOT_CMD 'chmod 755 /data/local/tmp/frida-server'
 fi
 
-# Try multiple ports in case default is in use
-PORTS=(27042 27043 27044 27045)
-SUCCESS=0
+# Default port
+PORT=27042
 
-for PORT in "${PORTS[@]}"; do
-    echo -e "${BLUE}[*]${NC} Starting frida-server on port $PORT..."
+echo -e "${BLUE}[*]${NC} Starting frida-server on port $PORT..."
+
+# Start frida-server in background
+$ROOT_CMD "/data/local/tmp/frida-server -l 0.0.0.0:$PORT &" 2>&1
+
+# Wait longer for server to fully start
+sleep 3
+
+# Multiple connection test methods
+echo -e "${BLUE}[*]${NC} Testing connection..."
+
+# Method 1: Test with frida-ps
+if frida-ps -H 127.0.0.1:$PORT &>/dev/null; then
+    echo -e "${GREEN}[+]${NC} frida-server is running on port $PORT!"
+    echo ""
+    echo "ทดสอบ: frida-ps -H 127.0.0.1:$PORT"
+    echo "Hook แอป: ~/hook.sh <package_name> [script.js]"
+    exit 0
+fi
+
+# Method 2: Test with USB mode
+if frida-ps -U &>/dev/null; then
+    echo -e "${GREEN}[+]${NC} frida-server is running (USB mode)!"
+    echo ""
+    echo "ทดสอบ: frida-ps -U"
+    echo "Hook แอป: frida -U -f <package_name>"
+    exit 0
+fi
+
+# Method 3: Check if process is actually running
+if $ROOT_CMD 'pgrep -f frida-server' &>/dev/null; then
+    echo -e "${YELLOW}[!]${NC} frida-server process is running but not responding"
+    echo ""
+    echo -e "${BLUE}[*]${NC} Trying to restart with different options..."
     
-    # Check if port is in use
-    if $ROOT_CMD "netstat -tuln 2>/dev/null | grep -q :$PORT"; then
-        echo -e "${YELLOW}[!]${NC} Port $PORT is in use, trying next..."
-        continue
-    fi
-    
-    # Start frida-server
-    $ROOT_CMD "/data/local/tmp/frida-server -l 0.0.0.0:$PORT -D" 2>&1 &
+    $ROOT_CMD 'pkill -9 frida-server' 2>/dev/null
     sleep 2
     
-    # Test connection
+    # Try with localhost only
+    echo -e "${BLUE}[*]${NC} Trying with localhost binding..."
+    $ROOT_CMD "/data/local/tmp/frida-server -l 127.0.0.1:$PORT &" 2>&1
+    sleep 3
+    
     if frida-ps -H 127.0.0.1:$PORT &>/dev/null; then
-        echo -e "${GREEN}[+]${NC} frida-server is running on port $PORT!"
-        echo ""
+        echo -e "${GREEN}[+]${NC} Success with localhost binding!"
         echo "ทดสอบ: frida-ps -H 127.0.0.1:$PORT"
-        echo "หรือใช้: frida-ps -H 127.0.0.1 (default)"
-        echo ""
-        echo "Hook แอป: ~/hook.sh <package_name> [script.js]"
-        SUCCESS=1
-        break
-    else
-        echo -e "${YELLOW}[!]${NC} Port $PORT failed, trying next..."
-        $ROOT_CMD 'pkill -9 frida-server' 2>/dev/null
-        sleep 1
+        exit 0
     fi
-done
-
-if [ $SUCCESS -eq 0 ]; then
-    echo -e "${RED}[-]${NC} Failed to start frida-server on all ports"
-    echo ""
-    echo -e "${YELLOW}Debug info:${NC}"
-    $ROOT_CMD '/data/local/tmp/frida-server --version' 2>&1
-    echo ""
-    echo -e "${YELLOW}Checking logcat:${NC}"
-    $ROOT_CMD 'logcat -d | grep -i frida | tail -20'
+    
+    # Try without explicit listen address
+    echo -e "${BLUE}[*]${NC} Trying without explicit binding..."
+    $ROOT_CMD 'pkill -9 frida-server' 2>/dev/null
+    sleep 2
+    $ROOT_CMD "/data/local/tmp/frida-server &" 2>&1
+    sleep 3
+    
+    if frida-ps -U &>/dev/null; then
+        echo -e "${GREEN}[+]${NC} Success with default binding!"
+        echo "ทดสอบ: frida-ps -U"
+        exit 0
+    fi
 fi
+
+# If all methods failed
+echo -e "${RED}[-]${NC} Failed to start frida-server"
+echo ""
+echo -e "${YELLOW}Debug info:${NC}"
+echo "Version: $($ROOT_CMD '/data/local/tmp/frida-server --version' 2>&1)"
+echo ""
+echo "Process check:"
+$ROOT_CMD 'pgrep -f frida-server' 2>&1 || echo "No frida-server process found"
+echo ""
+echo "Port check:"
+$ROOT_CMD 'netstat -tuln 2>/dev/null | grep 27042' || echo "Port 27042 not in use"
+echo ""
+echo -e "${YELLOW}Manual start command:${NC}"
+echo "su"
+echo "/data/local/tmp/frida-server &"
 EOFSTART
 chmod 755 ~/start_frida.sh
 
@@ -579,7 +617,9 @@ echo ""
 echo -e "${BLUE}[*]${NC} Checking running frida-server..."
 if $ROOT_CMD 'pgrep -f frida-server' &>/dev/null; then
     echo -e "${GREEN}[+]${NC} Process: Running"
-    $ROOT_CMD 'ps aux | grep frida-server | grep -v grep'
+    PID=$($ROOT_CMD 'pgrep -f frida-server')
+    echo "PID: $PID"
+    $ROOT_CMD "ps -p $PID -o pid,cmd 2>/dev/null" || $ROOT_CMD "ps | grep frida-server | grep -v grep"
 else
     echo -e "${YELLOW}[!]${NC} Process: Not running"
 fi
