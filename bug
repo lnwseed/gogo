@@ -379,10 +379,10 @@ fi
 # Default port
 PORT=27042
 
-echo -e "${BLUE}[*]${NC} Starting frida-server on port $PORT..."
+echo -e "${BLUE}[*]${NC} Starting frida-server on port $PORT (Daemon mode)..."
 
-# Start frida-server in background
-$ROOT_CMD "/data/local/tmp/frida-server -l 0.0.0.0:$PORT &" 2>&1
+# Start frida-server in Daemon mode to avoid SELinux policy errors
+$ROOT_CMD "/data/local/tmp/frida-server -l 0.0.0.0:$PORT -D" 2>&1
 
 # Wait longer for server to fully start
 sleep 3
