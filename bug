@@ -1,0 +1,636 @@
+#!/data/data/com.termux/files/usr/bin/bash
+# =====================================================
+# Frida Auto Setup Script for Termux (Enhanced)
+# อัพเดท Termux + ติดตั้ง Frida Server + Frida CLI
+# พร้อมระบบตรวจสอบและแก้ไขปัญหาอัตโนมัติ
+# 
+# ใช้: chmod 777 setup.sh && ./setup.sh
+# =====================================================
+
+clear
+echo "╔═══════════════════════════════════════════════════════════╗"
+echo "║         Frida Auto Setup for Termux (Enhanced)            ║"
+echo "║         Auto detect, check & fix common issues            ║"
+echo "╚═══════════════════════════════════════════════════════════╝"
+echo ""
+
+# Colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+NC='\033[0m' # No Color
+
+# =====================================================
+# Helper Functions
+# =====================================================
+
+log_info() {
+    echo -e "${BLUE}[*]${NC} $1"
+}
+
+log_success() {
+    echo -e "${GREEN}[+]${NC} $1"
+}
+
+log_warning() {
+    echo -e "${YELLOW}[!]${NC} $1"
+}
+
+log_error() {
+    echo -e "${RED}[-]${NC} $1"
+}
+
+log_step() {
+    echo -e "${CYAN}[Step $1]${NC} $2"
+    echo ""
+}
+
+check_root() {
+    log_info "Checking root access..."
+    
+    if command -v tsu &> /dev/null; then
+        if tsu -c 'id' 2>/dev/null | grep -q "uid=0"; then
+            ROOT_CMD="tsu -c"
+            log_success "Root available via: tsu"
+            return 0
+        fi
+    fi
+    
+    if su -c 'id' 2>/dev/null | grep -q "uid=0"; then
+        ROOT_CMD="su -c"
+        log_success "Root available via: su -c"
+        return 0
+    fi
+    
+    log_error "Root not available!"
+    log_warning "กรุณาเปิด Magisk/KernelSU และให้สิทธิ์ root กับ Termux"
+    return 1
+}
+
+check_selinux() {
+    log_info "Checking SELinux status..."
+    
+    SELINUX_STATUS=$($ROOT_CMD 'getenforce' 2>/dev/null)
+    
+    if [ "$SELINUX_STATUS" = "Enforcing" ]; then
+        log_warning "SELinux is Enforcing - will set to Permissive"
+        $ROOT_CMD 'setenforce 0' 2>/dev/null
+        
+        NEW_STATUS=$($ROOT_CMD 'getenforce' 2>/dev/null)
+        if [ "$NEW_STATUS" = "Permissive" ]; then
+            log_success "SELinux set to Permissive"
+        else
+            log_warning "Could not change SELinux (may need manual fix)"
+        fi
+    else
+        log_success "SELinux: $SELINUX_STATUS (OK)"
+    fi
+}
+
+kill_old_frida() {
+    log_info "Killing old frida-server processes..."
+    $ROOT_CMD 'pkill -9 frida-server' 2>/dev/null
+    $ROOT_CMD 'killall -9 frida-server' 2>/dev/null
+    sleep 1
+    log_success "Cleanup complete"
+}
+
+test_frida_server() {
+    log_info "Testing frida-server executable..."
+    
+    if ! $ROOT_CMD 'test -f /data/local/tmp/frida-server' 2>/dev/null; then
+        log_error "frida-server not found in /data/local/tmp/"
+        return 1
+    fi
+    
+    log_success "File exists: /data/local/tmp/frida-server"
+    
+    # Check permissions
+    PERMS=$($ROOT_CMD 'stat -c %a /data/local/tmp/frida-server' 2>/dev/null)
+    log_info "Permissions: $PERMS"
+    
+    if [ "$PERMS" != "755" ]; then
+        log_warning "Fixing permissions..."
+        $ROOT_CMD 'chmod 755 /data/local/tmp/frida-server'
+    fi
+    
+    # Test if executable works
+    VERSION=$($ROOT_CMD '/data/local/tmp/frida-server --version' 2>/dev/null)
+    if [ -n "$VERSION" ]; then
+        log_success "frida-server version: $VERSION"
+        return 0
+    else
+        log_error "frida-server cannot execute (wrong architecture?)"
+        return 1
+    fi
+}
+
+# =====================================================
+# Main Installation
+# =====================================================
+
+log_step "1/8" "Detecting device information..."
+
+DEVICE_MODEL=$(getprop ro.product.model)
+DEVICE_BRAND=$(getprop ro.product.brand)
+ANDROID_VER=$(getprop ro.build.version.release)
+SDK_VER=$(getprop ro.build.version.sdk)
+CPU_ABI=$(getprop ro.product.cpu.abi)
+CPU_ABI_LIST=$(getprop ro.product.cpu.abilist)
+
+echo "┌─────────────────────────────────────────────────┐"
+echo "│ 📱 Device Information                           │"
+echo "├─────────────────────────────────────────────────┤"
+echo "│ Brand      : $DEVICE_BRAND"
+echo "│ Model      : $DEVICE_MODEL"
+echo "│ Android    : $ANDROID_VER (SDK $SDK_VER)"
+echo "│ CPU ABI    : $CPU_ABI"
+echo "│ Supported  : $CPU_ABI_LIST"
+echo "└─────────────────────────────────────────────────┘"
+echo ""
+
+case "$CPU_ABI" in
+    "arm64-v8a")
+        FRIDA_ARCH="arm64"
+        ARCH_BITS="64-bit"
+        ;;
+    "armeabi-v7a")
+        FRIDA_ARCH="arm"
+        ARCH_BITS="32-bit"
+        ;;
+    "x86_64")
+        FRIDA_ARCH="x86_64"
+        ARCH_BITS="64-bit"
+        ;;
+    "x86")
+        FRIDA_ARCH="x86"
+        ARCH_BITS="32-bit"
+        ;;
+    *)
+        log_error "Unknown architecture: $CPU_ABI"
+        exit 1
+        ;;
+esac
+
+log_success "Detected: $ARCH_BITS ($FRIDA_ARCH)"
+echo ""
+
+log_step "2/8" "Updating Termux packages..."
+pkg update -y && pkg upgrade -y
+log_success "Termux updated!"
+echo ""
+
+log_step "3/8" "Installing dependencies..."
+pkg install -y wget curl xz-utils python tsu root-repo 2>&1 | grep -v "WARNING"
+pkg install -y frida-tools 2>&1 | grep -v "WARNING"
+log_success "Dependencies installed!"
+echo ""
+
+log_step "4/8" "Setting up storage access..."
+if [ ! -d ~/storage ]; then
+    termux-setup-storage
+    sleep 2
+fi
+log_success "Storage ready!"
+echo ""
+
+log_step "5/8" "Detecting Frida version..."
+FRIDA_VER=$(frida --version 2>/dev/null)
+if [ -z "$FRIDA_VER" ]; then
+    FRIDA_VER="16.5.9"
+    log_warning "frida command not found, using fallback version ${FRIDA_VER}"
+else
+    log_success "Frida CLI version: $FRIDA_VER"
+fi
+echo ""
+
+log_step "6/8" "Downloading frida-server..."
+
+FRIDA_SERVER_NAME="frida-server-${FRIDA_VER}-android-${FRIDA_ARCH}"
+DOWNLOAD_URL="https://github.com/frida/frida/releases/download/${FRIDA_VER}/${FRIDA_SERVER_NAME}.xz"
+
+log_info "URL: $DOWNLOAD_URL"
+echo ""
+
+cd ~
+rm -f frida-server.xz frida-server 2>/dev/null
+
+if command -v curl &> /dev/null; then
+    curl -L -o frida-server.xz "$DOWNLOAD_URL" --progress-bar
+else
+    wget -O frida-server.xz "$DOWNLOAD_URL" --show-progress
+fi
+
+if [ ! -f frida-server.xz ]; then
+    log_error "Download failed!"
+    log_warning "Trying alternative version (16.5.9)..."
+    
+    FRIDA_VER="16.5.9"
+    FRIDA_SERVER_NAME="frida-server-${FRIDA_VER}-android-${FRIDA_ARCH}"
+    DOWNLOAD_URL="https://github.com/frida/frida/releases/download/${FRIDA_VER}/${FRIDA_SERVER_NAME}.xz"
+    
+    if command -v curl &> /dev/null; then
+        curl -L -o frida-server.xz "$DOWNLOAD_URL" --progress-bar
+    else
+        wget -O frida-server.xz "$DOWNLOAD_URL" --show-progress
+    fi
+    
+    if [ ! -f frida-server.xz ]; then
+        log_error "Alternative download also failed!"
+        exit 1
+    fi
+fi
+
+log_info "Extracting..."
+xz -d -f frida-server.xz
+
+if [ ! -f frida-server ]; then
+    log_error "Extract failed!"
+    exit 1
+fi
+
+log_success "Downloaded frida-server successfully!"
+echo ""
+
+log_step "7/8" "Installing and testing frida-server..."
+echo ""
+
+# Check root
+if ! check_root; then
+    log_error "Root required for installation!"
+    log_info "Manual installation steps:"
+    echo "   1. เปิด Magisk/KernelSU"
+    echo "   2. ให้สิทธิ์ root กับ Termux"
+    echo "   3. รัน: su"
+    echo "   4. รัน: cp ~/frida-server /data/local/tmp/"
+    echo "   5. รัน: chmod 755 /data/local/tmp/frida-server"
+    exit 1
+fi
+
+# Kill old processes
+kill_old_frida
+
+# Check and disable SELinux if needed
+check_selinux
+
+# Copy frida-server
+log_info "Copying frida-server to /data/local/tmp/..."
+$ROOT_CMD "cp $HOME/frida-server /data/local/tmp/frida-server"
+$ROOT_CMD 'chmod 755 /data/local/tmp/frida-server'
+
+# Test installation
+if ! test_frida_server; then
+    log_error "Installation verification failed!"
+    log_warning "Architecture mismatch detected - trying alternative version..."
+    
+    # Try downloading alternative architecture if current one fails
+    if [ "$FRIDA_ARCH" = "arm64" ]; then
+        ALT_ARCH="arm"
+    elif [ "$FRIDA_ARCH" = "arm" ]; then
+        ALT_ARCH="arm64"
+    else
+        exit 1
+    fi
+    
+    log_info "Trying $ALT_ARCH instead..."
+    cd ~
+    FRIDA_SERVER_NAME="frida-server-${FRIDA_VER}-android-${ALT_ARCH}"
+    DOWNLOAD_URL="https://github.com/frida/frida/releases/download/${FRIDA_VER}/${FRIDA_SERVER_NAME}.xz"
+    
+    wget -O frida-server.xz "$DOWNLOAD_URL" --show-progress
+    xz -d -f frida-server.xz
+    
+    $ROOT_CMD "cp $HOME/frida-server /data/local/tmp/frida-server"
+    $ROOT_CMD 'chmod 755 /data/local/tmp/frida-server'
+    
+    if ! test_frida_server; then
+        log_error "Still failed. Please check device compatibility."
+        exit 1
+    fi
+fi
+
+log_success "frida-server installed and verified!"
+echo ""
+
+log_step "8/8" "Creating helper scripts..."
+
+# Enhanced start_frida.sh with better error handling
+cat > ~/start_frida.sh << 'EOFSTART'
+#!/data/data/com.termux/files/usr/bin/bash
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m'
+
+echo -e "${BLUE}[*]${NC} Starting frida-server..."
+echo ""
+
+# Detect root command
+ROOT_CMD=""
+if command -v tsu &> /dev/null; then
+    if tsu -c 'id' 2>/dev/null | grep -q "uid=0"; then
+        ROOT_CMD="tsu -c"
+    fi
+fi
+
+if [ -z "$ROOT_CMD" ]; then
+    if su -c 'id' 2>/dev/null | grep -q "uid=0"; then
+        ROOT_CMD="su -c"
+    fi
+fi
+
+if [ -z "$ROOT_CMD" ]; then
+    echo -e "${RED}[-]${NC} Root not available!"
+    echo -e "${YELLOW}[!]${NC} กรุณาเปิด Magisk/KernelSU และให้สิทธิ์ root"
+    exit 1
+fi
+
+# Kill old processes
+echo -e "${BLUE}[*]${NC} Killing old frida-server processes..."
+$ROOT_CMD 'pkill -9 frida-server' 2>/dev/null
+$ROOT_CMD 'killall -9 frida-server' 2>/dev/null
+sleep 1
+
+# Check SELinux
+SELINUX_STATUS=$($ROOT_CMD 'getenforce' 2>/dev/null)
+if [ "$SELINUX_STATUS" = "Enforcing" ]; then
+    echo -e "${YELLOW}[!]${NC} SELinux is Enforcing, setting to Permissive..."
+    $ROOT_CMD 'setenforce 0' 2>/dev/null
+fi
+
+# Check if frida-server exists
+if ! $ROOT_CMD 'test -f /data/local/tmp/frida-server' 2>/dev/null; then
+    echo -e "${RED}[-]${NC} frida-server not found in /data/local/tmp/"
+    echo -e "${YELLOW}[!]${NC} Please run setup.sh first"
+    exit 1
+fi
+
+# Check permissions
+PERMS=$($ROOT_CMD 'stat -c %a /data/local/tmp/frida-server' 2>/dev/null)
+if [ "$PERMS" != "755" ]; then
+    echo -e "${YELLOW}[!]${NC} Fixing permissions..."
+    $ROOT_CMD 'chmod 755 /data/local/tmp/frida-server'
+fi
+
+# Try multiple ports in case default is in use
+PORTS=(27042 27043 27044 27045)
+SUCCESS=0
+
+for PORT in "${PORTS[@]}"; do
+    echo -e "${BLUE}[*]${NC} Starting frida-server on port $PORT..."
+    
+    # Check if port is in use
+    if $ROOT_CMD "netstat -tuln 2>/dev/null | grep -q :$PORT"; then
+        echo -e "${YELLOW}[!]${NC} Port $PORT is in use, trying next..."
+        continue
+    fi
+    
+    # Start frida-server
+    $ROOT_CMD "/data/local/tmp/frida-server -l 0.0.0.0:$PORT -D" 2>&1 &
+    sleep 2
+    
+    # Test connection
+    if frida-ps -H 127.0.0.1:$PORT &>/dev/null; then
+        echo -e "${GREEN}[+]${NC} frida-server is running on port $PORT!"
+        echo ""
+        echo "ทดสอบ: frida-ps -H 127.0.0.1:$PORT"
+        echo "หรือใช้: frida-ps -H 127.0.0.1 (default)"
+        echo ""
+        echo "Hook แอป: ~/hook.sh <package_name> [script.js]"
+        SUCCESS=1
+        break
+    else
+        echo -e "${YELLOW}[!]${NC} Port $PORT failed, trying next..."
+        $ROOT_CMD 'pkill -9 frida-server' 2>/dev/null
+        sleep 1
+    fi
+done
+
+if [ $SUCCESS -eq 0 ]; then
+    echo -e "${RED}[-]${NC} Failed to start frida-server on all ports"
+    echo ""
+    echo -e "${YELLOW}Debug info:${NC}"
+    $ROOT_CMD '/data/local/tmp/frida-server --version' 2>&1
+    echo ""
+    echo -e "${YELLOW}Checking logcat:${NC}"
+    $ROOT_CMD 'logcat -d | grep -i frida | tail -20'
+fi
+EOFSTART
+chmod 755 ~/start_frida.sh
+
+# Enhanced hook.sh with better error handling
+cat > ~/hook.sh << 'EOFHOOK'
+#!/data/data/com.termux/files/usr/bin/bash
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m'
+
+if [ -z "$1" ]; then
+    echo -e "${RED}Usage:${NC} ./hook.sh <package_name> [script.js] [port]"
+    echo ""
+    echo "Examples:"
+    echo "  ./hook.sh com.example.app"
+    echo "  ./hook.sh com.example.app script.js"
+    echo "  ./hook.sh com.example.app script.js 27042"
+    exit 1
+fi
+
+PKG="$1"
+SCRIPT="$2"
+PORT="${3:-27042}"
+
+echo -e "${BLUE}[*]${NC} Hooking: $PKG"
+[ -n "$SCRIPT" ] && echo -e "${BLUE}[*]${NC} Script: $SCRIPT"
+echo -e "${BLUE}[*]${NC} Port: $PORT"
+echo ""
+
+# Check if frida-server is running
+if ! frida-ps -H 127.0.0.1:$PORT &>/dev/null; then
+    echo -e "${RED}[-]${NC} frida-server not running on port $PORT"
+    echo -e "${YELLOW}[!]${NC} Start it first: ~/start_frida.sh"
+    exit 1
+fi
+
+# Check if package is installed
+if ! frida-ps -H 127.0.0.1:$PORT | grep -q "$PKG"; then
+    if ! pm list packages | grep -q "$PKG"; then
+        echo -e "${RED}[-]${NC} Package not installed: $PKG"
+        exit 1
+    fi
+fi
+
+# Hook the app
+if [ -n "$SCRIPT" ]; then
+    if [ ! -f "$SCRIPT" ]; then
+        echo -e "${RED}[-]${NC} Script not found: $SCRIPT"
+        exit 1
+    fi
+    frida -H 127.0.0.1:$PORT -f "$PKG" -l "$SCRIPT" --no-pause
+else
+    frida -H 127.0.0.1:$PORT -f "$PKG" --no-pause
+fi
+EOFHOOK
+chmod 755 ~/hook.sh
+
+# Create stop script
+cat > ~/stop_frida.sh << 'EOFSTOP'
+#!/data/data/com.termux/files/usr/bin/bash
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+NC='\033[0m'
+
+echo -e "${RED}[*]${NC} Stopping all frida-server processes..."
+
+ROOT_CMD=""
+if command -v tsu &> /dev/null; then
+    if tsu -c 'id' 2>/dev/null | grep -q "uid=0"; then
+        ROOT_CMD="tsu -c"
+    fi
+fi
+
+if [ -z "$ROOT_CMD" ]; then
+    if su -c 'id' 2>/dev/null | grep -q "uid=0"; then
+        ROOT_CMD="su -c"
+    fi
+fi
+
+if [ -z "$ROOT_CMD" ]; then
+    echo -e "${RED}[-]${NC} Root not available!"
+    exit 1
+fi
+
+$ROOT_CMD 'pkill -9 frida-server' 2>/dev/null
+$ROOT_CMD 'killall -9 frida-server' 2>/dev/null
+
+sleep 1
+echo -e "${GREEN}[+]${NC} All frida-server processes stopped"
+EOFSTOP
+chmod 755 ~/stop_frida.sh
+
+# Create status check script
+cat > ~/frida_status.sh << 'EOFSTATUS'
+#!/data/data/com.termux/files/usr/bin/bash
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m'
+
+echo -e "${BLUE}╔═══════════════════════════════════════╗${NC}"
+echo -e "${BLUE}║       Frida Status Check              ║${NC}"
+echo -e "${BLUE}╚═══════════════════════════════════════╝${NC}"
+echo ""
+
+ROOT_CMD=""
+if command -v tsu &> /dev/null; then
+    if tsu -c 'id' 2>/dev/null | grep -q "uid=0"; then
+        ROOT_CMD="tsu -c"
+    fi
+fi
+
+if [ -z "$ROOT_CMD" ]; then
+    if su -c 'id' 2>/dev/null | grep -q "uid=0"; then
+        ROOT_CMD="su -c"
+    fi
+fi
+
+# Check root
+if [ -z "$ROOT_CMD" ]; then
+    echo -e "${RED}[-]${NC} Root: Not available"
+else
+    echo -e "${GREEN}[+]${NC} Root: Available ($ROOT_CMD)"
+fi
+
+# Check SELinux
+SELINUX_STATUS=$($ROOT_CMD 'getenforce' 2>/dev/null)
+if [ "$SELINUX_STATUS" = "Permissive" ]; then
+    echo -e "${GREEN}[+]${NC} SELinux: $SELINUX_STATUS"
+else
+    echo -e "${YELLOW}[!]${NC} SELinux: $SELINUX_STATUS"
+fi
+
+# Check frida-server file
+if $ROOT_CMD 'test -f /data/local/tmp/frida-server' 2>/dev/null; then
+    VERSION=$($ROOT_CMD '/data/local/tmp/frida-server --version' 2>/dev/null)
+    echo -e "${GREEN}[+]${NC} frida-server: Installed ($VERSION)"
+else
+    echo -e "${RED}[-]${NC} frida-server: Not found"
+fi
+
+# Check frida-tools
+FRIDA_CLI_VER=$(frida --version 2>/dev/null)
+if [ -n "$FRIDA_CLI_VER" ]; then
+    echo -e "${GREEN}[+]${NC} frida-tools: $FRIDA_CLI_VER"
+else
+    echo -e "${RED}[-]${NC} frida-tools: Not installed"
+fi
+
+# Check running processes
+echo ""
+echo -e "${BLUE}[*]${NC} Checking running frida-server..."
+if $ROOT_CMD 'pgrep -f frida-server' &>/dev/null; then
+    echo -e "${GREEN}[+]${NC} Process: Running"
+    $ROOT_CMD 'ps aux | grep frida-server | grep -v grep'
+else
+    echo -e "${YELLOW}[!]${NC} Process: Not running"
+fi
+
+# Test connections on common ports
+echo ""
+echo -e "${BLUE}[*]${NC} Testing connections..."
+for PORT in 27042 27043 27044; do
+    if frida-ps -H 127.0.0.1:$PORT &>/dev/null; then
+        echo -e "${GREEN}[+]${NC} Port $PORT: Responding"
+    else
+        echo -e "${RED}[-]${NC} Port $PORT: Not responding"
+    fi
+done
+EOFSTATUS
+chmod 755 ~/frida_status.sh
+
+log_success "Helper scripts created!"
+echo ""
+
+echo "╔═══════════════════════════════════════════════════════════╗"
+echo "║                 ✅ Setup Complete!                        ║"
+echo "╚═══════════════════════════════════════════════════════════╝"
+echo ""
+echo "┌─────────────────────────────────────────────────┐"
+echo "│ 📋 Installation Summary                         │"
+echo "├─────────────────────────────────────────────────┤"
+echo "│ Device     : $DEVICE_BRAND $DEVICE_MODEL"
+echo "│ Android    : $ANDROID_VER ($ARCH_BITS)"
+echo "│ Frida      : $FRIDA_VER"
+echo "│ Arch       : $FRIDA_ARCH"
+echo "│ Root       : $ROOT_CMD"
+echo "└─────────────────────────────────────────────────┘"
+echo ""
+echo "┌─────────────────────────────────────────────────┐"
+echo "│ 🚀 คำสั่งที่ใช้งาน                              │"
+echo "├─────────────────────────────────────────────────┤"
+echo "│ Start server:                                   │"
+echo "│   ~/start_frida.sh                              │"
+echo "│                                                 │"
+echo "│ Check status:                                   │"
+echo "│   ~/frida_status.sh                             │"
+echo "│                                                 │"
+echo "│ Stop server:                                    │"
+echo "│   ~/stop_frida.sh                               │"
+echo "│                                                 │"
+echo "│ Hook app:                                       │"
+echo "│   ~/hook.sh <package> [script.js]               │"
+echo "│                                                 │"
+echo "│ List processes:                                 │"
+echo "│   frida-ps -H 127.0.0.1:27042                   │"
+echo "└─────────────────────────────────────────────────┘"
+echo ""
+log_success "ติดตั้งสำเร็จ! รันคำสั่ง ~/start_frida.sh เพื่อเริ่มใช้งาน"
