@@ -225,9 +225,8 @@ sleep 2
 
 # Test
 if frida-ps -H 127.0.0.1:27042 &>/dev/null; then
-    echo "[+] frida-server is running!"
+    echo "[+] Server is running!"
     echo ""
-    echo "ทดสอบ: frida-ps -H 127.0.0.1:27042"
 else
     echo "[-] Failed to start. Check root permission."
 fi
@@ -292,7 +291,3 @@ echo "│    frida -H 127.0.0.1:27042 -f <pkg> -l <js>    │"
 echo "│                                                 │"
 echo "└─────────────────────────────────────────────────┘"
 echo ""
-# เพิ่มบรรทัดนี้ลงท้ายไฟล์
-echo "" >> ~/.bashrc
-echo "# Auto-start Frida Server" >> ~/.bashrc
-echo "~/start_frida.sh 2>/dev/null &" >> ~/.bashrc
