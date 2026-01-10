@@ -225,7 +225,7 @@ sleep 2
 
 # Test
 if frida-ps -H 127.0.0.1:27042 &>/dev/null; then
-    echo "[+] Server is running!"
+    echo -e "${GREEN}[+] Server is running!"
     echo ""
 else
     echo "[-] Failed to start. Check root permission."
