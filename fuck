@@ -531,16 +531,23 @@ start_frida_server() {
 test_frida() {
     print_section "ทดสอบการทำงาน"
     
+    print_info "Connection mode: -H 127.0.0.1:27042"
     print_info "Testing Frida connection..."
     sleep 2
     
-    # ทดสอบการเชื่อมต่อ
+    # ทดสอบการเชื่อมต่อแบบ -H (localhost)
     if frida-ps -H 127.0.0.1:27042 &> /dev/null; then
-        print_success "Frida is working!"
+        print_success "Frida is working! (localhost mode)"
         echo ""
         print_info "Sample processes (top 10):"
         frida-ps -H 127.0.0.1:27042 | head -11
-        log "Frida test: Success"
+        log "Frida test: Success (localhost)"
+        
+        # แสดงคำสั่งที่ใช้
+        echo ""
+        print_info "Connection command:"
+        echo "  frida-ps -H 127.0.0.1:27042"
+        
         return 0
     else
         print_error "Cannot connect to frida-server"
@@ -553,6 +560,14 @@ test_frida() {
             print_info "frida-server is running"
         else
             print_warning "frida-server is not running"
+            print_info "Try: ~/frida-start"
+        fi
+        
+        # เช็คพอร์ต
+        if su -c "netstat -tulpn 2>/dev/null | grep 27042" > /dev/null; then
+            print_info "Port 27042 is listening"
+        else
+            print_warning "Port 27042 not listening"
         fi
         
         # เช็คเวอร์ชัน
@@ -565,6 +580,13 @@ test_frida() {
         if [ "$client_ver" != "$server_ver" ]; then
             print_warning "Version mismatch detected!"
         fi
+        
+        # แนะนำแก้ไข
+        echo ""
+        print_info "Quick fixes:"
+        echo "  1. ~/frida-start"
+        echo "  2. su -c 'setenforce 0'"
+        echo "  3. frida-ps -H 127.0.0.1:27042"
         
         return 1
     fi
@@ -586,8 +608,21 @@ sleep 1
 su -c "/data/local/tmp/frida-server &"
 sleep 2
 if pgrep -f frida-server > /dev/null; then
-    echo "✓ Frida Server started"
-    frida-ps -H 127.0.0.1:27042 | head -5
+    echo "✓ Frida Server started (PID: $(pgrep -f frida-server))"
+    echo ""
+    echo "Testing connection..."
+    if frida-ps -H 127.0.0.1:27042 &>/dev/null; then
+        echo "✓ Connection successful!"
+        echo ""
+        echo "Sample processes:"
+        frida-ps -H 127.0.0.1:27042 | head -5
+    else
+        echo "✗ Connection failed"
+        echo ""
+        echo "Try:"
+        echo "  su -c 'setenforce 0'"
+        echo "  frida-ps -H 127.0.0.1:27042"
+    fi
 else
     echo "✗ Failed to start"
 fi
@@ -604,7 +639,14 @@ sleep 1
 if ! pgrep -f frida-server > /dev/null; then
     echo "✓ Frida Server stopped"
 else
-    echo "⚠ Failed to stop"
+    echo "⚠ Failed to stop (trying force kill)"
+    su -c "killall -9 frida-server 2>/dev/null"
+    sleep 1
+    if ! pgrep -f frida-server > /dev/null; then
+        echo "✓ Frida Server stopped (forced)"
+    else
+        echo "✗ Still running (PID: $(pgrep -f frida-server))"
+    fi
 fi
 EOFSTOP
     chmod +x "$HOME/frida-stop"
@@ -614,25 +656,138 @@ EOFSTOP
     cat > "$HOME/frida-status" << 'EOFSTATUS'
 #!/data/data/com.termux/files/usr/bin/bash
 echo "📊 Frida Status"
-echo "═══════════════"
+echo "═══════════════════════════════════════════"
 echo ""
-echo "Client: $(frida --version 2>/dev/null || echo 'Not installed')"
-echo "Server: $(su -c '/data/local/tmp/frida-server --version' 2>/dev/null || echo 'Not installed')"
+
+# Versions
+echo "🔹 Versions:"
+CLIENT_VER=$(frida --version 2>/dev/null || echo 'Not installed')
+SERVER_VER=$(su -c '/data/local/tmp/frida-server --version' 2>/dev/null || echo 'Not installed')
+echo "  Client: $CLIENT_VER"
+echo "  Server: $SERVER_VER"
+
+if [ "$CLIENT_VER" != "$SERVER_VER" ] && [ "$CLIENT_VER" != "Not installed" ] && [ "$SERVER_VER" != "Not installed" ]; then
+    echo "  ⚠️  Version mismatch!"
+fi
 echo ""
+
+# Process
+echo "🔹 Process:"
 if pgrep -f frida-server > /dev/null; then
-    echo "Process: ✓ Running (PID: $(pgrep -f frida-server))"
+    PID=$(pgrep -f frida-server)
+    echo "  ✓ Running (PID: $PID)"
 else
-    echo "Process: ✗ Not running"
+    echo "  ✗ Not running"
 fi
 echo ""
-if frida-ps -H 127.0.0.1:27042 &>/dev/null; then
-    echo "Connection: ✓ Working"
+
+# Port
+echo "🔹 Port 27042:"
+if su -c "netstat -tulpn 2>/dev/null | grep 27042" > /dev/null || \
+   su -c "ss -tulpn 2>/dev/null | grep 27042" > /dev/null; then
+    echo "  ✓ Listening"
 else
-    echo "Connection: ✗ Failed"
+    echo "  ✗ Not listening"
 fi
+echo ""
+
+# Connection
+echo "🔹 Connection Test:"
+echo "  Mode: -H 127.0.0.1:27042"
+if frida-ps -H 127.0.0.1:27042 &>/dev/null; then
+    PROC_COUNT=$(frida-ps -H 127.0.0.1:27042 2>/dev/null | wc -l)
+    echo "  ✓ Connected ($PROC_COUNT processes)"
+else
+    echo "  ✗ Failed"
+fi
+echo ""
+
+# SELinux
+echo "🔹 SELinux:"
+SELINUX=$(su -c "getenforce" 2>/dev/null || echo "Unknown")
+echo "  Status: $SELINUX"
+if [ "$SELINUX" = "Enforcing" ]; then
+    echo "  ⚠️  May cause connection issues"
+    echo "  Fix: su -c 'setenforce 0'"
+fi
+echo ""
+
+# Quick commands
+echo "🔹 Quick Commands:"
+echo "  Start:  ~/frida-start"
+echo "  Stop:   ~/frida-stop"
+echo "  Test:   frida-ps -H 127.0.0.1:27042"
+echo "  Bypass: su -c 'setenforce 0'"
 EOFSTATUS
     chmod +x "$HOME/frida-status"
     print_success "Created: ~/frida-status"
+    
+    # frida-test (ทดสอบการเชื่อมต่อ)
+    cat > "$HOME/frida-test" << 'EOFTEST'
+#!/data/data/com.termux/files/usr/bin/bash
+echo "🧪 Testing Frida Connection"
+echo "═══════════════════════════════════════════"
+echo ""
+
+# Connection modes
+echo "Testing connection modes..."
+echo ""
+
+# Mode 1: -H 127.0.0.1:27042 (Recommended)
+echo "1️⃣ Mode: -H 127.0.0.1:27042"
+if frida-ps -H 127.0.0.1:27042 &>/dev/null; then
+    echo "   ✓ Success"
+    WORKING_MODE="localhost"
+else
+    echo "   ✗ Failed"
+fi
+echo ""
+
+# Mode 2: -U (USB/Auto-detect)
+echo "2️⃣ Mode: -U (auto-detect)"
+if frida-ps -U &>/dev/null; then
+    echo "   ✓ Success"
+    if [ -z "$WORKING_MODE" ]; then
+        WORKING_MODE="usb"
+    fi
+else
+    echo "   ✗ Failed"
+fi
+echo ""
+
+# Mode 3: -R (Remote)
+echo "3️⃣ Mode: -R (remote)"
+if frida-ps -R &>/dev/null; then
+    echo "   ✓ Success"
+    if [ -z "$WORKING_MODE" ]; then
+        WORKING_MODE="remote"
+    fi
+else
+    echo "   ✗ Failed"
+fi
+echo ""
+
+# Summary
+echo "═══════════════════════════════════════════"
+if [ -n "$WORKING_MODE" ]; then
+    echo "✅ Frida is working! (mode: $WORKING_MODE)"
+    echo ""
+    echo "Recommended command:"
+    echo "  frida-ps -H 127.0.0.1:27042"
+    echo ""
+    echo "Sample processes:"
+    frida-ps -H 127.0.0.1:27042 2>/dev/null | head -5 || frida-ps -U 2>/dev/null | head -5
+else
+    echo "❌ Frida is not working"
+    echo ""
+    echo "Troubleshooting:"
+    echo "  1. ~/frida-start"
+    echo "  2. su -c 'setenforce 0'"
+    echo "  3. ~/frida-status"
+fi
+EOFTEST
+    chmod +x "$HOME/frida-test"
+    print_success "Created: ~/frida-test"
     
     log "Helper scripts created"
 }
@@ -661,31 +816,77 @@ show_summary() {
     
     echo -e "${CYAN}Status:${NC}"
     if pgrep -f frida-server > /dev/null; then
-        echo -e "  frida-server: ${GREEN}Running${NC}"
+        echo -e "  frida-server: ${GREEN}Running${NC} (PID: $(pgrep -f frida-server))"
     else
         echo -e "  frida-server: ${RED}Not running${NC}"
     fi
     
     if frida-ps -H 127.0.0.1:27042 &>/dev/null; then
-        echo -e "  Connection: ${GREEN}Working${NC}"
+        echo -e "  Connection: ${GREEN}Working${NC} (localhost mode)"
     else
         echo -e "  Connection: ${RED}Failed${NC}"
+    fi
+    
+    # SELinux status
+    local selinux=$(su -c "getenforce" 2>/dev/null || echo "Unknown")
+    echo -e "  SELinux: $selinux"
+    if [ "$selinux" = "Enforcing" ]; then
+        echo -e "    ${YELLOW}⚠️  May cause issues${NC}"
     fi
     echo ""
     
     echo -e "${CYAN}Helper Scripts:${NC}"
     echo "  ~/frida-start   - Start frida-server"
     echo "  ~/frida-stop    - Stop frida-server"
-    echo "  ~/frida-status  - Check status"
+    echo "  ~/frida-status  - Check detailed status"
+    echo "  ~/frida-test    - Test connection modes"
+    echo ""
+    
+    echo -e "${CYAN}Connection Mode:${NC}"
+    echo "  Localhost: -H 127.0.0.1:27042 (Recommended) ⭐"
+    echo "  Auto USB:  -U"
+    echo "  Remote:    -R"
     echo ""
     
     echo -e "${CYAN}Quick Commands:${NC}"
-    echo "  frida-ps -H 127.0.0.1:27042          # List processes"
-    echo "  objection -N -h 127.0.0.1 -p 27042 -g <app> explore"
+    echo "  ${YELLOW}# List processes${NC}"
+    echo "  frida-ps -H 127.0.0.1:27042"
+    echo ""
+    echo "  ${YELLOW}# List apps${NC}"
+    echo "  frida-ps -H 127.0.0.1:27042 -a"
+    echo ""
+    echo "  ${YELLOW}# List running apps${NC}"
+    echo "  frida-ps -H 127.0.0.1:27042 -ai"
+    echo ""
+    echo "  ${YELLOW}# Search app${NC}"
+    echo "  frida-ps -H 127.0.0.1:27042 -ai | grep whatsapp"
+    echo ""
+    echo "  ${YELLOW}# Use Objection${NC}"
+    echo "  objection -N -h 127.0.0.1 -p 27042 -g <package> explore"
+    echo ""
+    echo "  ${YELLOW}# Use Frida script${NC}"
+    echo "  frida -H 127.0.0.1:27042 -f <package> -l script.js"
+    echo ""
+    
+    echo -e "${CYAN}Troubleshooting:${NC}"
+    echo "  ${YELLOW}# If connection fails${NC}"
+    echo "  ~/frida-start"
+    echo "  su -c 'setenforce 0'"
+    echo ""
+    echo "  ${YELLOW}# Check status${NC}"
+    echo "  ~/frida-status"
     echo ""
     
     echo -e "${CYAN}Log File:${NC}"
     echo "  $LOG_FILE"
+    echo ""
+    
+    # Tips
+    echo -e "${CYAN}💡 Tips:${NC}"
+    echo "  • Use ${YELLOW}-H 127.0.0.1:27042${NC} for all Frida commands"
+    echo "  • Run ${YELLOW}~/frida-status${NC} to check everything"
+    echo "  • Run ${YELLOW}~/frida-test${NC} to test connection modes"
+    echo "  • If SELinux is Enforcing, run: ${YELLOW}su -c 'setenforce 0'${NC}"
     echo ""
 }
 
