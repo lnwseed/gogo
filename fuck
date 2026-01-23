@@ -1,13 +1,9 @@
 #!/data/data/com.termux/files/usr/bin/bash
 
 #============================================
-# Universal Frida Auto-Installer
-# ติดตั้ง Frida + frida-server อัตโนมัติ
-# รองรับทุก Android version, ทุก architecture
-# Version: 2.0
+# Root Access Checker for Termux
+# ตรวจสอบ root access แบบครบถ้วน
 #============================================
-
-set -e
 
 # สี
 RED='\033[0;31m'
@@ -19,21 +15,11 @@ MAGENTA='\033[0;35m'
 WHITE='\033[1;37m'
 NC='\033[0m'
 
-# ตัวแปรสำคัญ
-LOG_FILE="$HOME/frida_install_$(date +%Y%m%d_%H%M%S).log"
-FRIDA_VERSION=""
-PYTHON_VERSION=""
-ANDROID_VERSION=""
-ARCHITECTURE=""
-TERMUX_VERSION=""
-
 # ฟังก์ชันแสดงผล
 print_header() {
-    clear
     echo ""
     echo -e "${BLUE}╔══════════════════════════════════════════╗${NC}"
-    echo -e "${BLUE}║  🚀 Universal Frida Auto-Installer 🚀  ║${NC}"
-    echo -e "${BLUE}║        All-in-One Installation          ║${NC}"
+    echo -e "${BLUE}║     🔐 Root Access Checker v2.0 🔐      ║${NC}"
     echo -e "${BLUE}╚══════════════════════════════════════════╝${NC}"
     echo ""
 }
@@ -60,879 +46,463 @@ print_info() {
     echo -e "${BLUE}ℹ${NC} $1"
 }
 
-log() {
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" >> "$LOG_FILE"
-}
-
-#============================================
-# ตรวจสอบสภาพแวดล้อม
-#============================================
-
-check_environment() {
-    print_section "ตรวจสอบสภาพแวดล้อม"
-    
-    # ตรวจสอบว่าอยู่ใน Termux หรือไม่
+# ตรวจสอบว่าอยู่ใน Termux หรือไม่
+check_termux() {
     if [ ! -d "/data/data/com.termux" ]; then
-        print_error "ไม่ได้รันใน Termux!"
+        print_error "Not running in Termux!"
         exit 1
     fi
-    print_success "รันใน Termux"
-    log "Running in Termux"
+}
+
+# เช็คว่ามีคำสั่งหรือไม่
+command_exists() {
+    command -v "$1" &> /dev/null
+}
+
+#============================================
+# 1. เช็ค su command
+#============================================
+check_su_command() {
+    print_section "1. ตรวจสอบคำสั่ง su"
     
-    # Architecture
-    ARCHITECTURE=$(uname -m)
-    case $ARCHITECTURE in
-        aarch64)
-            FRIDA_ARCH="arm64"
-            ;;
-        armv7l|armv8l)
-            FRIDA_ARCH="arm"
-            ;;
-        x86_64)
-            FRIDA_ARCH="x86_64"
-            ;;
-        i686|x86)
-            FRIDA_ARCH="x86"
-            ;;
-        *)
-            print_error "Unknown architecture: $ARCHITECTURE"
-            exit 1
-            ;;
-    esac
-    print_success "Architecture: $ARCHITECTURE ($FRIDA_ARCH)"
-    log "Architecture: $ARCHITECTURE ($FRIDA_ARCH)"
-    
-    # Android Version
-    ANDROID_VERSION=$(getprop ro.build.version.release 2>/dev/null || echo "Unknown")
-    ANDROID_SDK=$(getprop ro.build.version.sdk 2>/dev/null || echo "0")
-    print_success "Android: $ANDROID_VERSION (SDK $ANDROID_SDK)"
-    log "Android: $ANDROID_VERSION (SDK $ANDROID_SDK)"
-    
-    # Security Patch Level
-    SECURITY_PATCH=$(getprop ro.build.version.security_patch 2>/dev/null || echo "Unknown")
-    print_info "Security Patch: $SECURITY_PATCH"
-    log "Security Patch: $SECURITY_PATCH"
-    
-    # Python Version
-    if command -v python &> /dev/null; then
-        PYTHON_VERSION=$(python --version 2>&1 | awk '{print $2}')
-        print_success "Python: $PYTHON_VERSION"
-        log "Python: $PYTHON_VERSION"
-    else
-        print_warning "Python not found (will install)"
-        log "Python not found"
-    fi
-    
-    # Termux Version
-    TERMUX_VERSION=$(pkg list-installed 2>/dev/null | grep "^termux/" | head -1 | awk '{print $2}' || echo "Unknown")
-    print_info "Termux: $TERMUX_VERSION"
-    log "Termux: $TERMUX_VERSION"
-    
-    # Storage Permission
-    if [ -d "$HOME/storage" ]; then
-        print_success "Storage access configured"
-    else
-        print_warning "Storage access not configured"
-        print_info "Run: termux-setup-storage"
-    fi
-    
-    # Root Check
-    echo ""
-    print_info "Checking root access..."
-    if su -c "echo test" &>/dev/null; then
-        print_success "Root access available"
-        log "Root access: Yes"
-    else
-        print_error "No root access!"
-        print_warning "This script requires root for frida-server"
-        echo ""
-        read -p "Continue anyway? (y/n): " continue_choice
-        if [[ ! "$continue_choice" =~ ^[Yy]$ ]]; then
-            exit 1
+    if command_exists su; then
+        print_success "พบคำสั่ง su"
+        
+        # หา path
+        SU_PATH=$(which su 2>/dev/null)
+        if [ -n "$SU_PATH" ]; then
+            echo "  Path: ${GREEN}$SU_PATH${NC}"
+            
+            # เช็ค permissions
+            if [ -x "$SU_PATH" ]; then
+                echo "  Permissions: ${GREEN}Executable${NC}"
+            else
+                echo "  Permissions: ${RED}Not executable${NC}"
+            fi
+            
+            # เช็ค file type
+            FILE_TYPE=$(file "$SU_PATH" 2>/dev/null | cut -d: -f2)
+            echo "  Type:${FILE_TYPE}"
         fi
-        log "Root access: No (continued anyway)"
+        
+        SU_AVAILABLE=true
+    else
+        print_error "ไม่พบคำสั่ง su"
+        SU_AVAILABLE=false
     fi
 }
 
 #============================================
-# ติดตั้ง Dependencies
+# 2. เช็ค tsu (Termux su wrapper)
 #============================================
+check_tsu() {
+    print_section "2. ตรวจสอบ tsu (Termux su wrapper)"
+    
+    if command_exists tsu; then
+        print_success "พบ tsu"
+        
+        TSU_PATH=$(which tsu 2>/dev/null)
+        if [ -n "$TSU_PATH" ]; then
+            echo "  Path: ${GREEN}$TSU_PATH${NC}"
+        fi
+        
+        TSU_AVAILABLE=true
+    else
+        print_error "ไม่พบ tsu"
+        print_info "ติดตั้ง: pkg install tsu"
+        TSU_AVAILABLE=false
+    fi
+}
 
-install_dependencies() {
-    print_section "ติดตั้ง Dependencies"
+#============================================
+# 3. เช็ค Magisk
+#============================================
+check_magisk() {
+    print_section "3. ตรวจสอบ Magisk"
     
-    # Update package list
-    print_info "Updating package lists..."
-    pkg update -y 2>&1 | tee -a "$LOG_FILE" | grep -v "^Reading" || true
-    print_success "Package lists updated"
-    
-    # Essential packages
-    local packages=(
-        "python"
-        "wget"
-        "curl"
-        "git"
-        "build-essential"
-        "binutils"
-        "pkg-config"
-        "xz-utils"
+    # เช็ค magisk binary
+    MAGISK_PATHS=(
+        "/system/xbin/su"
+        "/system/bin/su"
+        "/sbin/su"
+        "/data/adb/magisk/busybox"
+        "/data/adb/ap/magisk"
+        "/data/adb/ksu/bin/su"
     )
     
-    print_info "Installing essential packages..."
-    for pkg_name in "${packages[@]}"; do
-        if ! dpkg -l | grep -q "^ii.*$pkg_name"; then
-            echo -n "  Installing $pkg_name... "
-            if pkg install "$pkg_name" -y >> "$LOG_FILE" 2>&1; then
-                echo -e "${GREEN}✓${NC}"
-                log "Installed: $pkg_name"
-            else
-                echo -e "${YELLOW}⚠${NC}"
-                log "Failed to install: $pkg_name"
+    MAGISK_FOUND=false
+    for path in "${MAGISK_PATHS[@]}"; do
+        if [ -f "$path" ]; then
+            print_success "พบ Magisk su: $path"
+            MAGISK_FOUND=true
+            
+            # ลองดู version
+            VERSION=$("$path" -v 2>/dev/null || echo "unknown")
+            if [ "$VERSION" != "unknown" ]; then
+                echo "  Version: ${GREEN}$VERSION${NC}"
             fi
-        else
-            echo -e "  $pkg_name: ${GREEN}already installed${NC}"
+            break
         fi
     done
     
-    # Root repo (for tsu)
-    print_info "Setting up root repository..."
-    if ! dpkg -l | grep -q "^ii.*root-repo"; then
-        if pkg install root-repo -y >> "$LOG_FILE" 2>&1; then
-            print_success "root-repo installed"
-            log "Installed: root-repo"
-            pkg update -y >> "$LOG_FILE" 2>&1
-        else
-            print_warning "Failed to install root-repo"
-            log "Failed: root-repo"
-        fi
-    else
-        print_success "root-repo already installed"
+    if [ "$MAGISK_FOUND" = false ]; then
+        print_warning "ไม่พบ Magisk su ใน path มาตรฐาน"
     fi
     
-    # tsu (su wrapper)
-    if ! command -v tsu &> /dev/null; then
-        print_info "Installing tsu..."
-        if pkg install tsu -y >> "$LOG_FILE" 2>&1; then
-            print_success "tsu installed"
-            log "Installed: tsu"
-        else
-            print_warning "Failed to install tsu (not critical)"
-            log "Failed: tsu"
-        fi
-    else
-        print_success "tsu already installed"
-    fi
-    
-    # Python packages
-    print_info "Installing Python build dependencies..."
-    if pip list 2>/dev/null | grep -q wheel; then
-        print_success "Python build tools ready"
-    else
-        pip install --upgrade pip wheel setuptools --break-system-packages >> "$LOG_FILE" 2>&1 || true
-        print_success "Python build tools installed"
+    # เช็ค Magisk app
+    if pm list packages 2>/dev/null | grep -q "com.topjohnwu.magisk"; then
+        print_success "พบ Magisk Manager app"
     fi
 }
 
 #============================================
-# ตรวจสอบความเข้ากันได้ของ Frida
+# 4. เช็ค SuperSU
 #============================================
-
-detect_compatible_frida_version() {
-    print_section "ตรวจสอบ Frida Version ที่รองรับ"
+check_supersu() {
+    print_section "4. ตรวจสอบ SuperSU"
     
-    # ตรวจสอบ Python version
-    local python_major=$(python --version 2>&1 | awk '{print $2}' | cut -d. -f1)
-    local python_minor=$(python --version 2>&1 | awk '{print $2}' | cut -d. -f2)
+    # เช็ค SuperSU binary
+    SUPERSU_PATHS=(
+        "/system/xbin/su"
+        "/system/bin/.ext/.su"
+        "/system/xbin/daemonsu"
+    )
     
-    print_info "Python version: $python_major.$python_minor"
-    
-    # กำหนด Frida version ตาม Android SDK และ Python
-    local recommended_version=""
-    
-    # ตาม Android version
-    if [ "$ANDROID_SDK" -ge 34 ]; then
-        # Android 14+
-        recommended_version="17.6.1"
-        print_info "Android 14+ detected → Trying Frida 17.6.1"
-    elif [ "$ANDROID_SDK" -ge 33 ]; then
-        # Android 13
-        recommended_version="17.2.14"
-        print_info "Android 13 detected → Trying Frida 17.2.14"
-    elif [ "$ANDROID_SDK" -ge 31 ]; then
-        # Android 12
-        recommended_version="16.5.9"
-        print_info "Android 12 detected → Trying Frida 16.5.9"
-    elif [ "$ANDROID_SDK" -ge 29 ]; then
-        # Android 10-11
-        recommended_version="16.0.19"
-        print_info "Android 10-11 detected → Trying Frida 16.0.19"
-    else
-        # Android 9 ลงไป
-        recommended_version="15.2.2"
-        print_info "Android 9- detected → Trying Frida 15.2.2"
-    fi
-    
-    # เช็คว่าสามารถติดตั้งได้หรือไม่
-    print_info "Testing Frida $recommended_version compatibility..."
-    
-    # ลองติดตั้ง (แบบ dry-run)
-    if pip install --dry-run frida-tools==$recommended_version --break-system-packages >> "$LOG_FILE" 2>&1; then
-        FRIDA_VERSION="$recommended_version"
-        print_success "Frida $FRIDA_VERSION is compatible"
-        log "Compatible Frida version: $FRIDA_VERSION"
-    else
-        # ถ้าไม่ได้ ลองเวอร์ชันที่ต่ำกว่า
-        print_warning "Frida $recommended_version not compatible"
-        
-        local fallback_versions=(
-            "17.2.14"
-            "16.5.9"
-            "16.0.19"
-            "15.2.2"
-            "15.1.17"
-        )
-        
-        for version in "${fallback_versions[@]}"; do
-            print_info "Trying Frida $version..."
-            if pip install --dry-run frida-tools==$version --break-system-packages >> "$LOG_FILE" 2>&1; then
-                FRIDA_VERSION="$version"
-                print_success "Frida $FRIDA_VERSION is compatible"
-                log "Compatible Frida version (fallback): $FRIDA_VERSION"
-                break
+    for path in "${SUPERSU_PATHS[@]}"; do
+        if [ -f "$path" ]; then
+            # เช็คว่าเป็น SuperSU หรือไม่
+            if "$path" -v 2>/dev/null | grep -qi "supersu"; then
+                print_success "พบ SuperSU: $path"
+                VERSION=$("$path" -v 2>/dev/null)
+                echo "  Version: ${GREEN}$VERSION${NC}"
+                return 0
             fi
-        done
-        
-        if [ -z "$FRIDA_VERSION" ]; then
-            print_error "No compatible Frida version found!"
-            print_info "Defaulting to latest available..."
-            FRIDA_VERSION="latest"
         fi
-    fi
+    done
     
-    echo ""
-    print_success "Selected Frida version: $FRIDA_VERSION"
+    print_info "ไม่พบ SuperSU"
 }
 
 #============================================
-# ติดตั้ง Frida Tools
+# 5. เช็ค KernelSU
 #============================================
-
-install_frida_tools() {
-    print_section "ติดตั้ง Frida Tools"
+check_kernelsu() {
+    print_section "5. ตรวจสอบ KernelSU"
     
-    # ถอนเวอร์ชันเดิม (ถ้ามี)
-    if pip list 2>/dev/null | grep -q "^frida "; then
-        print_info "Removing old Frida installation..."
-        pip uninstall frida frida-tools -y >> "$LOG_FILE" 2>&1 || true
-        print_success "Old version removed"
-    fi
-    
-    # ติดตั้งเวอร์ชันใหม่
-    print_info "Installing Frida Tools $FRIDA_VERSION..."
-    echo "This may take a few minutes..."
-    
-    if [ "$FRIDA_VERSION" = "latest" ]; then
-        if pip install frida-tools --break-system-packages 2>&1 | tee -a "$LOG_FILE" | grep -E "(Successfully|Requirement)"; then
-            print_success "Frida Tools installed"
-            FRIDA_VERSION=$(frida --version 2>/dev/null)
-            log "Installed Frida Tools: $FRIDA_VERSION"
-        else
-            print_error "Failed to install Frida Tools"
-            return 1
+    if [ -f "/data/adb/ksu/bin/su" ]; then
+        print_success "พบ KernelSU"
+        VERSION=$(/data/adb/ksu/bin/su -v 2>/dev/null || echo "unknown")
+        if [ "$VERSION" != "unknown" ]; then
+            echo "  Version: ${GREEN}$VERSION${NC}"
         fi
     else
-        if pip install frida-tools==$FRIDA_VERSION --break-system-packages 2>&1 | tee -a "$LOG_FILE" | grep -E "(Successfully|Requirement)"; then
-            print_success "Frida Tools $FRIDA_VERSION installed"
-            log "Installed Frida Tools: $FRIDA_VERSION"
-        else
-            print_error "Failed to install Frida Tools $FRIDA_VERSION"
-            return 1
-        fi
-    fi
-    
-    # ตรวจสอบการติดตั้ง
-    if command -v frida &> /dev/null; then
-        local installed_version=$(frida --version 2>/dev/null)
-        print_success "Frida CLI: $installed_version"
-        FRIDA_VERSION="$installed_version"
-    else
-        print_error "Frida installation failed"
-        return 1
+        print_info "ไม่พบ KernelSU"
     fi
 }
 
 #============================================
-# ติดตั้ง Frida Server
+# 6. ทดสอบ root access
 #============================================
-
-install_frida_server() {
-    print_section "ติดตั้ง Frida Server"
+test_root_access() {
+    print_section "6. ทดสอบ Root Access"
     
-    print_info "Version: $FRIDA_VERSION"
-    print_info "Architecture: $FRIDA_ARCH"
-    
-    # สร้าง URL สำหรับดาวน์โหลด
-    local download_url="https://github.com/frida/frida/releases/download/$FRIDA_VERSION/frida-server-$FRIDA_VERSION-android-$FRIDA_ARCH.xz"
-    
-    print_info "Download URL: $download_url"
-    log "Download URL: $download_url"
-    
-    # สร้างโฟลเดอร์ชั่วคราว
-    local temp_dir="$HOME/.frida_temp"
-    mkdir -p "$temp_dir"
-    cd "$temp_dir"
-    
-    # ดาวน์โหลด
-    print_info "Downloading frida-server..."
-    if wget "$download_url" -O frida-server.xz 2>&1 | grep -E "(saved|100%)"; then
-        print_success "Downloaded successfully"
-        log "Downloaded frida-server"
-    else
-        print_error "Download failed"
-        print_info "Trying with curl..."
-        if curl -L "$download_url" -o frida-server.xz 2>&1 | grep -E "(100|Downloaded)"; then
-            print_success "Downloaded successfully (curl)"
-            log "Downloaded frida-server (curl)"
-        else
-            print_error "Download failed with both wget and curl"
-            log "Download failed"
-            return 1
-        fi
-    fi
-    
-    # แตกไฟล์
-    print_info "Extracting..."
-    if xz -d frida-server.xz 2>&1 | tee -a "$LOG_FILE"; then
-        print_success "Extracted"
-    else
-        print_error "Extraction failed"
-        return 1
-    fi
-    
-    # ตรวจสอบไฟล์
-    if [ ! -f "frida-server" ]; then
-        print_error "frida-server file not found after extraction"
-        return 1
-    fi
-    
-    # ติดตั้ง
-    print_info "Installing frida-server..."
-    
-    # หยุด frida-server เดิม
-    su -c "killall frida-server 2>/dev/null" || true
-    sleep 1
-    
-    # สำรองเดิม
-    su -c "[ -f /data/local/tmp/frida-server ] && mv /data/local/tmp/frida-server /data/local/tmp/frida-server.backup" || true
-    
-    # คัดลอกไฟล์ใหม่
-    if su -c "cp $temp_dir/frida-server /data/local/tmp/frida-server && chmod 755 /data/local/tmp/frida-server"; then
-        print_success "frida-server installed to /data/local/tmp/"
-        log "Installed frida-server"
-    else
-        print_error "Failed to install frida-server"
-        return 1
-    fi
-    
-    # ตรวจสอบเวอร์ชัน
-    local server_version=$(su -c "/data/local/tmp/frida-server --version" 2>/dev/null)
-    print_success "frida-server version: $server_version"
-    log "frida-server version: $server_version"
-    
-    # ทำความสะอาด
-    cd "$HOME"
-    rm -rf "$temp_dir"
-    
-    # ตรวจสอบความตรงกันของเวอร์ชัน
-    if [ "$FRIDA_VERSION" != "$server_version" ]; then
-        print_warning "Version mismatch!"
-        print_warning "  Client: $FRIDA_VERSION"
-        print_warning "  Server: $server_version"
-        print_info "This might cause issues"
-    else
-        print_success "Version match: $FRIDA_VERSION"
-    fi
-}
-
-#============================================
-# ตั้งค่า SELinux
-#============================================
-
-configure_selinux() {
-    print_section "ตั้งค่า SELinux"
-    
-    local selinux_status=$(su -c "getenforce" 2>/dev/null || echo "Unknown")
-    print_info "Current SELinux: $selinux_status"
-    
-    if [ "$selinux_status" = "Enforcing" ]; then
-        print_warning "SELinux is Enforcing (may cause issues)"
-        echo ""
-        read -p "Set SELinux to Permissive? (Recommended) (y/n): " selinux_choice
-        
-        if [[ "$selinux_choice" =~ ^[Yy]$ ]]; then
-            if su -c "setenforce 0" 2>/dev/null; then
-                print_success "SELinux set to Permissive"
-                log "SELinux: Permissive"
-                print_warning "Note: This is temporary (resets after reboot)"
+    # ทดสอบด้วย su
+    if [ "$SU_AVAILABLE" = true ]; then
+        echo -n "  Testing su... "
+        if su -c "echo test" &>/dev/null; then
+            echo -e "${GREEN}✓ Working${NC}"
+            ROOT_WORKS_SU=true
+            
+            # ดู uid
+            ROOT_UID=$(su -c "id -u" 2>/dev/null)
+            if [ "$ROOT_UID" = "0" ]; then
+                echo "    UID: ${GREEN}0 (root)${NC}"
             else
-                print_warning "Failed to set SELinux (not critical)"
+                echo "    UID: ${RED}$ROOT_UID (not root!)${NC}"
+            fi
+        else
+            echo -e "${RED}✗ Failed${NC}"
+            ROOT_WORKS_SU=false
+        fi
+    fi
+    
+    # ทดสอบด้วย tsu
+    if [ "$TSU_AVAILABLE" = true ]; then
+        echo -n "  Testing tsu... "
+        if tsu -c "echo test" &>/dev/null; then
+            echo -e "${GREEN}✓ Working${NC}"
+            ROOT_WORKS_TSU=true
+            
+            ROOT_UID=$(tsu -c "id -u" 2>/dev/null)
+            if [ "$ROOT_UID" = "0" ]; then
+                echo "    UID: ${GREEN}0 (root)${NC}"
+            fi
+        else
+            echo -e "${RED}✗ Failed${NC}"
+            ROOT_WORKS_TSU=false
+        fi
+    fi
+}
+
+#============================================
+# 7. เช็ค su paths ทั้งหมด
+#============================================
+check_all_su_paths() {
+    print_section "7. ค้นหา su ทุก path"
+    
+    COMMON_PATHS=(
+        "/system/bin/su"
+        "/system/xbin/su"
+        "/system/sbin/su"
+        "/sbin/su"
+        "/su/bin/su"
+        "/data/local/bin/su"
+        "/data/local/su"
+        "/data/adb/magisk/busybox"
+        "/data/adb/ap/magisk"
+        "/data/adb/ksu/bin/su"
+        "/system/bin/.ext/.su"
+        "/system/xbin/daemonsu"
+    )
+    
+    FOUND_COUNT=0
+    for path in "${COMMON_PATHS[@]}"; do
+        if [ -f "$path" ]; then
+            print_success "พบ: $path"
+            
+            # ดู permissions
+            PERMS=$(ls -l "$path" 2>/dev/null | awk '{print $1}')
+            echo "    Permissions: $PERMS"
+            
+            # ดู owner
+            OWNER=$(ls -l "$path" 2>/dev/null | awk '{print $3":"$4}')
+            echo "    Owner: $OWNER"
+            
+            # ลองดู version
+            if [ -x "$path" ]; then
+                VERSION=$("$path" -v 2>/dev/null || "$path" --version 2>/dev/null || echo "")
+                if [ -n "$VERSION" ]; then
+                    echo "    Version: ${GREEN}$VERSION${NC}"
+                fi
+            fi
+            
+            FOUND_COUNT=$((FOUND_COUNT + 1))
+            echo ""
+        fi
+    done
+    
+    if [ $FOUND_COUNT -eq 0 ]; then
+        print_warning "ไม่พบ su ใน path มาตรฐานทั้งหมด"
+    else
+        print_info "พบ su ทั้งหมด: $FOUND_COUNT ตำแหน่ง"
+    fi
+}
+
+#============================================
+# 8. เช็ค Environment Variables
+#============================================
+check_environment() {
+    print_section "8. ตรวจสอบ Environment"
+    
+    # เช็ค PATH
+    echo "PATH directories:"
+    echo "$PATH" | tr ':' '\n' | while read -r dir; do
+        if [ -d "$dir" ]; then
+            if ls -la "$dir/su" 2>/dev/null | grep -q "su"; then
+                echo "  ${GREEN}✓${NC} $dir (มี su)"
+            else
+                echo "    $dir"
             fi
         fi
-    elif [ "$selinux_status" = "Permissive" ]; then
-        print_success "SELinux is already Permissive"
+    done
+    
+    echo ""
+    
+    # เช็คว่า root-repo ติดตั้งหรือยัง
+    if pkg list-installed 2>/dev/null | grep -q "root-repo"; then
+        print_success "root-repo: ติดตั้งแล้ว"
+    else
+        print_warning "root-repo: ยังไม่ติดตั้ง"
+        print_info "ติดตั้ง: pkg install root-repo"
     fi
 }
 
 #============================================
-# เริ่ม Frida Server
+# 9. เช็ค SELinux
 #============================================
-
-start_frida_server() {
-    print_section "เริ่ม Frida Server"
+check_selinux() {
+    print_section "9. ตรวจสอบ SELinux"
     
-    # หยุดเดิม
-    su -c "killall frida-server 2>/dev/null" || true
-    sleep 1
-    
-    # เริ่มใหม่
-    print_info "Starting frida-server..."
-    if su -c "/data/local/tmp/frida-server &" 2>&1 | tee -a "$LOG_FILE"; then
-        sleep 2
+    if command_exists getenforce; then
+        SELINUX_STATUS=$(getenforce 2>/dev/null || echo "Unknown")
         
-        # ตรวจสอบว่ารันอยู่หรือไม่
-        if su -c "pgrep -f frida-server" > /dev/null; then
-            local pid=$(su -c "pgrep -f frida-server")
-            print_success "frida-server started (PID: $pid)"
-            log "frida-server started: PID $pid"
-        else
-            print_error "frida-server failed to start"
-            log "frida-server failed to start"
-            return 1
-        fi
+        case "$SELINUX_STATUS" in
+            Enforcing)
+                echo "  Status: ${RED}Enforcing${NC} (อาจมีปัญหา)"
+                print_info "แก้ไข: su -c 'setenforce 0'"
+                ;;
+            Permissive)
+                echo "  Status: ${GREEN}Permissive${NC} (ดี)"
+                ;;
+            Disabled)
+                echo "  Status: ${BLUE}Disabled${NC}"
+                ;;
+            *)
+                echo "  Status: ${YELLOW}$SELINUX_STATUS${NC}"
+                ;;
+        esac
     else
-        print_error "Failed to start frida-server"
-        return 1
-    fi
-    
-    # ตรวจสอบพอร์ต
-    sleep 1
-    if su -c "netstat -tulpn 2>/dev/null | grep 27042" > /dev/null || \
-       su -c "ss -tulpn 2>/dev/null | grep 27042" > /dev/null; then
-        print_success "Port 27042 is listening"
-    else
-        print_warning "Port 27042 not detected (might be normal)"
+        print_info "getenforce ไม่พบ"
     fi
 }
 
 #============================================
-# ทดสอบ Frida
+# 10. แนะนำการแก้ไข
 #============================================
-
-test_frida() {
-    print_section "ทดสอบการทำงาน"
+show_recommendations() {
+    print_section "10. คำแนะนำ"
     
-    print_info "Connection mode: -H 127.0.0.1:27042"
-    print_info "Testing Frida connection..."
-    sleep 2
+    HAS_ROOT=false
     
-    # ทดสอบการเชื่อมต่อแบบ -H (localhost)
-    if frida-ps -H 127.0.0.1:27042 &> /dev/null; then
-        print_success "Frida is working! (localhost mode)"
+    if [ "$ROOT_WORKS_SU" = true ] || [ "$ROOT_WORKS_TSU" = true ]; then
+        HAS_ROOT=true
+        print_success "Root access: ใช้งานได้!"
         echo ""
-        print_info "Sample processes (top 10):"
-        frida-ps -H 127.0.0.1:27042 | head -11
-        log "Frida test: Success (localhost)"
         
-        # แสดงคำสั่งที่ใช้
-        echo ""
-        print_info "Connection command:"
-        echo "  frida-ps -H 127.0.0.1:27042"
-        
-        return 0
+        if [ "$ROOT_WORKS_TSU" = true ]; then
+            echo "  แนะนำใช้: ${GREEN}tsu${NC}"
+            echo "  ตัวอย่าง: tsu -c 'whoami'"
+        elif [ "$ROOT_WORKS_SU" = true ]; then
+            echo "  ใช้: ${GREEN}su${NC}"
+            echo "  ตัวอย่าง: su -c 'whoami'"
+        fi
     else
-        print_error "Cannot connect to frida-server"
-        log "Frida test: Failed"
+        print_error "Root access: ไม่สามารถใช้งานได้"
+        echo ""
         
-        print_info "Troubleshooting..."
+        # แนะนำวิธีแก้
+        echo "${YELLOW}วิธีแก้ไข:${NC}"
+        echo ""
         
-        # เช็ค process
-        if su -c "pgrep -f frida-server" > /dev/null; then
-            print_info "frida-server is running"
-        else
-            print_warning "frida-server is not running"
-            print_info "Try: ~/frida-start"
+        if [ "$SU_AVAILABLE" = false ]; then
+            echo "1. ติดตั้ง root-repo และ tsu:"
+            echo "   ${CYAN}pkg install root-repo${NC}"
+            echo "   ${CYAN}pkg install tsu${NC}"
+            echo ""
         fi
         
-        # เช็คพอร์ต
-        if su -c "netstat -tulpn 2>/dev/null | grep 27042" > /dev/null; then
-            print_info "Port 27042 is listening"
-        else
-            print_warning "Port 27042 not listening"
+        if [ "$MAGISK_FOUND" = false ]; then
+            echo "2. ติดตั้ง Magisk:"
+            echo "   - ดาวน์โหลด: https://github.com/topjohnwu/Magisk/releases"
+            echo "   - ติดตั้ง Magisk app"
+            echo "   - Root มือถือ"
+            echo ""
         fi
         
-        # เช็คเวอร์ชัน
-        local client_ver=$(frida --version 2>/dev/null || echo "unknown")
-        local server_ver=$(su -c "/data/local/tmp/frida-server --version" 2>/dev/null || echo "unknown")
-        
-        print_info "Client version: $client_ver"
-        print_info "Server version: $server_ver"
-        
-        if [ "$client_ver" != "$server_ver" ]; then
-            print_warning "Version mismatch detected!"
-        fi
-        
-        # แนะนำแก้ไข
+        echo "3. ให้สิทธิ์ Termux ใน Magisk:"
+        echo "   - เปิด Magisk app"
+        echo "   - Superuser → อนุญาต Termux"
         echo ""
-        print_info "Quick fixes:"
-        echo "  1. ~/frida-start"
-        echo "  2. su -c 'setenforce 0'"
-        echo "  3. frida-ps -H 127.0.0.1:27042"
-        
-        return 1
     fi
-}
-
-#============================================
-# สร้างสคริปต์ช่วยเหลือ
-#============================================
-
-create_helper_scripts() {
-    print_section "สร้างสคริปต์ช่วยเหลือ"
-    
-    # frida-start
-    cat > "$HOME/frida-start" << 'EOFSTART'
-#!/data/data/com.termux/files/usr/bin/bash
-echo "🚀 Starting Frida Server..."
-su -c "killall frida-server 2>/dev/null"
-sleep 1
-su -c "/data/local/tmp/frida-server &"
-sleep 2
-if pgrep -f frida-server > /dev/null; then
-    echo "✓ Frida Server started (PID: $(pgrep -f frida-server))"
-    echo ""
-    echo "Testing connection..."
-    if frida-ps -H 127.0.0.1:27042 &>/dev/null; then
-        echo "✓ Connection successful!"
-        echo ""
-        echo "Sample processes:"
-        frida-ps -H 127.0.0.1:27042 | head -5
-    else
-        echo "✗ Connection failed"
-        echo ""
-        echo "Try:"
-        echo "  su -c 'setenforce 0'"
-        echo "  frida-ps -H 127.0.0.1:27042"
-    fi
-else
-    echo "✗ Failed to start"
-fi
-EOFSTART
-    chmod +x "$HOME/frida-start"
-    print_success "Created: ~/frida-start"
-    
-    # frida-stop
-    cat > "$HOME/frida-stop" << 'EOFSTOP'
-#!/data/data/com.termux/files/usr/bin/bash
-echo "🛑 Stopping Frida Server..."
-su -c "killall frida-server 2>/dev/null"
-sleep 1
-if ! pgrep -f frida-server > /dev/null; then
-    echo "✓ Frida Server stopped"
-else
-    echo "⚠ Failed to stop (trying force kill)"
-    su -c "killall -9 frida-server 2>/dev/null"
-    sleep 1
-    if ! pgrep -f frida-server > /dev/null; then
-        echo "✓ Frida Server stopped (forced)"
-    else
-        echo "✗ Still running (PID: $(pgrep -f frida-server))"
-    fi
-fi
-EOFSTOP
-    chmod +x "$HOME/frida-stop"
-    print_success "Created: ~/frida-stop"
-    
-    # frida-status
-    cat > "$HOME/frida-status" << 'EOFSTATUS'
-#!/data/data/com.termux/files/usr/bin/bash
-echo "📊 Frida Status"
-echo "═══════════════════════════════════════════"
-echo ""
-
-# Versions
-echo "🔹 Versions:"
-CLIENT_VER=$(frida --version 2>/dev/null || echo 'Not installed')
-SERVER_VER=$(su -c '/data/local/tmp/frida-server --version' 2>/dev/null || echo 'Not installed')
-echo "  Client: $CLIENT_VER"
-echo "  Server: $SERVER_VER"
-
-if [ "$CLIENT_VER" != "$SERVER_VER" ] && [ "$CLIENT_VER" != "Not installed" ] && [ "$SERVER_VER" != "Not installed" ]; then
-    echo "  ⚠️  Version mismatch!"
-fi
-echo ""
-
-# Process
-echo "🔹 Process:"
-if pgrep -f frida-server > /dev/null; then
-    PID=$(pgrep -f frida-server)
-    echo "  ✓ Running (PID: $PID)"
-else
-    echo "  ✗ Not running"
-fi
-echo ""
-
-# Port
-echo "🔹 Port 27042:"
-if su -c "netstat -tulpn 2>/dev/null | grep 27042" > /dev/null || \
-   su -c "ss -tulpn 2>/dev/null | grep 27042" > /dev/null; then
-    echo "  ✓ Listening"
-else
-    echo "  ✗ Not listening"
-fi
-echo ""
-
-# Connection
-echo "🔹 Connection Test:"
-echo "  Mode: -H 127.0.0.1:27042"
-if frida-ps -H 127.0.0.1:27042 &>/dev/null; then
-    PROC_COUNT=$(frida-ps -H 127.0.0.1:27042 2>/dev/null | wc -l)
-    echo "  ✓ Connected ($PROC_COUNT processes)"
-else
-    echo "  ✗ Failed"
-fi
-echo ""
-
-# SELinux
-echo "🔹 SELinux:"
-SELINUX=$(su -c "getenforce" 2>/dev/null || echo "Unknown")
-echo "  Status: $SELINUX"
-if [ "$SELINUX" = "Enforcing" ]; then
-    echo "  ⚠️  May cause connection issues"
-    echo "  Fix: su -c 'setenforce 0'"
-fi
-echo ""
-
-# Quick commands
-echo "🔹 Quick Commands:"
-echo "  Start:  ~/frida-start"
-echo "  Stop:   ~/frida-stop"
-echo "  Test:   frida-ps -H 127.0.0.1:27042"
-echo "  Bypass: su -c 'setenforce 0'"
-EOFSTATUS
-    chmod +x "$HOME/frida-status"
-    print_success "Created: ~/frida-status"
-    
-    # frida-test (ทดสอบการเชื่อมต่อ)
-    cat > "$HOME/frida-test" << 'EOFTEST'
-#!/data/data/com.termux/files/usr/bin/bash
-echo "🧪 Testing Frida Connection"
-echo "═══════════════════════════════════════════"
-echo ""
-
-# Connection modes
-echo "Testing connection modes..."
-echo ""
-
-# Mode 1: -H 127.0.0.1:27042 (Recommended)
-echo "1️⃣ Mode: -H 127.0.0.1:27042"
-if frida-ps -H 127.0.0.1:27042 &>/dev/null; then
-    echo "   ✓ Success"
-    WORKING_MODE="localhost"
-else
-    echo "   ✗ Failed"
-fi
-echo ""
-
-# Mode 2: -U (USB/Auto-detect)
-echo "2️⃣ Mode: -U (auto-detect)"
-if frida-ps -U &>/dev/null; then
-    echo "   ✓ Success"
-    if [ -z "$WORKING_MODE" ]; then
-        WORKING_MODE="usb"
-    fi
-else
-    echo "   ✗ Failed"
-fi
-echo ""
-
-# Mode 3: -R (Remote)
-echo "3️⃣ Mode: -R (remote)"
-if frida-ps -R &>/dev/null; then
-    echo "   ✓ Success"
-    if [ -z "$WORKING_MODE" ]; then
-        WORKING_MODE="remote"
-    fi
-else
-    echo "   ✗ Failed"
-fi
-echo ""
-
-# Summary
-echo "═══════════════════════════════════════════"
-if [ -n "$WORKING_MODE" ]; then
-    echo "✅ Frida is working! (mode: $WORKING_MODE)"
-    echo ""
-    echo "Recommended command:"
-    echo "  frida-ps -H 127.0.0.1:27042"
-    echo ""
-    echo "Sample processes:"
-    frida-ps -H 127.0.0.1:27042 2>/dev/null | head -5 || frida-ps -U 2>/dev/null | head -5
-else
-    echo "❌ Frida is not working"
-    echo ""
-    echo "Troubleshooting:"
-    echo "  1. ~/frida-start"
-    echo "  2. su -c 'setenforce 0'"
-    echo "  3. ~/frida-status"
-fi
-EOFTEST
-    chmod +x "$HOME/frida-test"
-    print_success "Created: ~/frida-test"
-    
-    log "Helper scripts created"
 }
 
 #============================================
 # สรุปผล
 #============================================
-
 show_summary() {
     echo ""
     echo -e "${BLUE}╔══════════════════════════════════════════╗${NC}"
-    echo -e "${BLUE}║          📊 Installation Summary        ║${NC}"
+    echo -e "${BLUE}║              📊 สรุปผล                  ║${NC}"
     echo -e "${BLUE}╚══════════════════════════════════════════╝${NC}"
     echo ""
     
-    echo -e "${CYAN}Environment:${NC}"
-    echo "  OS: Android $ANDROID_VERSION (SDK $ANDROID_SDK)"
-    echo "  Architecture: $ARCHITECTURE"
-    echo "  Python: $(python --version 2>&1 | awk '{print $2}')"
-    echo ""
-    
-    echo -e "${CYAN}Installed Versions:${NC}"
-    echo "  frida-tools: $(frida --version 2>/dev/null || echo 'Failed')"
-    echo "  frida-server: $(su -c '/data/local/tmp/frida-server --version' 2>/dev/null || echo 'Failed')"
-    echo ""
-    
-    echo -e "${CYAN}Status:${NC}"
-    if pgrep -f frida-server > /dev/null; then
-        echo -e "  frida-server: ${GREEN}Running${NC} (PID: $(pgrep -f frida-server))"
+    # Root Status
+    if [ "$ROOT_WORKS_SU" = true ] || [ "$ROOT_WORKS_TSU" = true ]; then
+        echo -e "Root Status: ${GREEN}✓ Available${NC}"
     else
-        echo -e "  frida-server: ${RED}Not running${NC}"
+        echo -e "Root Status: ${RED}✗ Not Available${NC}"
     fi
     
-    if frida-ps -H 127.0.0.1:27042 &>/dev/null; then
-        echo -e "  Connection: ${GREEN}Working${NC} (localhost mode)"
-    else
-        echo -e "  Connection: ${RED}Failed${NC}"
-    fi
+    # Available Commands
+    echo ""
+    echo "Available Commands:"
+    [ "$SU_AVAILABLE" = true ] && echo -e "  ${GREEN}✓${NC} su"
+    [ "$TSU_AVAILABLE" = true ] && echo -e "  ${GREEN}✓${NC} tsu"
+    [ "$SU_AVAILABLE" = false ] && [ "$TSU_AVAILABLE" = false ] && echo -e "  ${RED}✗${NC} None"
     
-    # SELinux status
-    local selinux=$(su -c "getenforce" 2>/dev/null || echo "Unknown")
-    echo -e "  SELinux: $selinux"
-    if [ "$selinux" = "Enforcing" ]; then
-        echo -e "    ${YELLOW}⚠️  May cause issues${NC}"
-    fi
+    # Root Method
     echo ""
+    echo "Root Method:"
+    [ "$MAGISK_FOUND" = true ] && echo -e "  ${GREEN}✓${NC} Magisk"
+    [ -f "/data/adb/ksu/bin/su" ] && echo -e "  ${GREEN}✓${NC} KernelSU"
     
-    echo -e "${CYAN}Helper Scripts:${NC}"
-    echo "  ~/frida-start   - Start frida-server"
-    echo "  ~/frida-stop    - Stop frida-server"
-    echo "  ~/frida-status  - Check detailed status"
-    echo "  ~/frida-test    - Test connection modes"
     echo ""
+}
+
+#============================================
+# สร้างไฟล์ report
+#============================================
+create_report() {
+    REPORT_FILE="$HOME/root-check-report.txt"
     
-    echo -e "${CYAN}Connection Mode:${NC}"
-    echo "  Localhost: -H 127.0.0.1:27042 (Recommended) ⭐"
-    echo "  Auto USB:  -U"
-    echo "  Remote:    -R"
-    echo ""
+    {
+        echo "Root Access Check Report"
+        echo "Generated: $(date)"
+        echo "================================"
+        echo ""
+        echo "Root Status:"
+        [ "$ROOT_WORKS_SU" = true ] && echo "  su: Working"
+        [ "$ROOT_WORKS_TSU" = true ] && echo "  tsu: Working"
+        [ "$ROOT_WORKS_SU" = false ] && [ "$ROOT_WORKS_TSU" = false ] && echo "  No root access"
+        echo ""
+        echo "Available su paths:"
+        for path in "${COMMON_PATHS[@]}"; do
+            [ -f "$path" ] && echo "  - $path"
+        done
+        echo ""
+        echo "Environment:"
+        echo "  PATH: $PATH"
+    } > "$REPORT_FILE"
     
-    echo -e "${CYAN}Quick Commands:${NC}"
-    echo "  ${YELLOW}# List processes${NC}"
-    echo "  frida-ps -H 127.0.0.1:27042"
-    echo ""
-    echo "  ${YELLOW}# List apps${NC}"
-    echo "  frida-ps -H 127.0.0.1:27042 -a"
-    echo ""
-    echo "  ${YELLOW}# List running apps${NC}"
-    echo "  frida-ps -H 127.0.0.1:27042 -ai"
-    echo ""
-    echo "  ${YELLOW}# Search app${NC}"
-    echo "  frida-ps -H 127.0.0.1:27042 -ai | grep whatsapp"
-    echo ""
-    echo "  ${YELLOW}# Use Objection${NC}"
-    echo "  objection -N -h 127.0.0.1 -p 27042 -g <package> explore"
-    echo ""
-    echo "  ${YELLOW}# Use Frida script${NC}"
-    echo "  frida -H 127.0.0.1:27042 -f <package> -l script.js"
-    echo ""
-    
-    echo -e "${CYAN}Troubleshooting:${NC}"
-    echo "  ${YELLOW}# If connection fails${NC}"
-    echo "  ~/frida-start"
-    echo "  su -c 'setenforce 0'"
-    echo ""
-    echo "  ${YELLOW}# Check status${NC}"
-    echo "  ~/frida-status"
-    echo ""
-    
-    echo -e "${CYAN}Log File:${NC}"
-    echo "  $LOG_FILE"
-    echo ""
-    
-    # Tips
-    echo -e "${CYAN}💡 Tips:${NC}"
-    echo "  • Use ${YELLOW}-H 127.0.0.1:27042${NC} for all Frida commands"
-    echo "  • Run ${YELLOW}~/frida-status${NC} to check everything"
-    echo "  • Run ${YELLOW}~/frida-test${NC} to test connection modes"
-    echo "  • If SELinux is Enforcing, run: ${YELLOW}su -c 'setenforce 0'${NC}"
-    echo ""
+    print_info "Report saved: $REPORT_FILE"
 }
 
 #============================================
 # Main Program
 #============================================
-
 main() {
     # เริ่มต้น
     print_header
-    echo "Starting installation at $(date)"
-    echo "Log file: $LOG_FILE"
-    echo ""
-    log "=== Frida Auto-Installer Started ==="
+    check_termux
     
-    # ขั้นตอนการติดตั้ง
-    check_environment || exit 1
-    install_dependencies || exit 1
-    detect_compatible_frida_version || exit 1
+    # ตรวจสอบ
+    check_su_command
+    check_tsu
+    check_magisk
+    check_supersu
+    check_kernelsu
+    test_root_access
+    check_all_su_paths
+    check_environment
+    check_selinux
     
-    # ยืนยันก่อนติดตั้ง
-    echo ""
-    print_warning "Ready to install Frida $FRIDA_VERSION"
-    read -p "Continue? (y/n): " confirm
-    if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
-        echo "Installation cancelled"
-        exit 0
-    fi
-    
-    install_frida_tools || exit 1
-    install_frida_server || exit 1
-    configure_selinux
-    start_frida_server || exit 1
-    test_frida
-    create_helper_scripts
+    # แนะนำ
+    show_recommendations
     
     # สรุป
     show_summary
     
-    echo -e "${GREEN}✅ Installation Complete!${NC}"
+    # สร้าง report
     echo ""
-    log "=== Installation Completed Successfully ==="
+    read -p "บันทึก report หรือไม่? (y/n): " save_report
+    if [[ "$save_report" =~ ^[Yy]$ ]]; then
+        create_report
+    fi
+    
+    echo ""
+    echo -e "${GREEN}✅ เสร็จสิ้น!${NC}"
+    echo ""
 }
-
-# Error handling
-trap 'echo -e "\n${RED}Error occurred. Check log: $LOG_FILE${NC}"; exit 1' ERR
 
 # รันโปรแกรม
 main "$@"
