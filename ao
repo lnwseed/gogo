@@ -1,18 +1,17 @@
 #!/data/data/com.termux/files/usr/bin/bash
 # =====================================================
-# Frida 16.5.6 Setup with Node.js (No Python)
-# ใช้งานบนมือถือเลย ไม่ต้องต่อคอม
+# Frida 16.5.6 Setup with Node.js (Fixed version)
 # =====================================================
 
 clear
 echo "╔═══════════════════════════════════════════════════════════╗"
-echo "║   Frida 16.5.6 Setup (Node.js - No Python Required)     ║"
+echo "║   Frida 16.5.6 Setup (Node.js - Fixed Install)          ║"
 echo "╚═══════════════════════════════════════════════════════════╝"
 echo ""
 
-# Colors
 GREEN='\033[0;32m'
 BLUE='\033[0;34m'
+YELLOW='\033[1;33m'
 NC='\033[0m'
 
 # ==================== Update Termux ====================
@@ -25,16 +24,31 @@ echo -e "${BLUE}[2/5]${NC} Installing dependencies..."
 pkg install -y nodejs wget xz-utils tsu
 echo ""
 
-# ==================== Install Frida CLI (Node.js) ====================
-echo -e "${BLUE}[3/5]${NC} Installing Frida 16.5.6 CLI..."
-npm install -g frida@16.5.6
+# ==================== Install Frida CLI ====================
+echo -e "${BLUE}[3/5]${NC} Installing Frida 16.5.6..."
+echo ""
+
+# ลบเวอร์ชันเก่า (ถ้ามี)
+npm uninstall -g frida 2>/dev/null
+
+# ติดตั้งแบบ silent mode + force
+echo "[*] Installing frida@16.5.6 (this may take a while)..."
+npm install -g frida@16.5.6 --quiet --force --no-optional --legacy-peer-deps
 
 # ตรวจสอบ
 if command -v frida &> /dev/null; then
-    FRIDA_VER=$(frida --version)
-    echo -e "${GREEN}✅ Frida CLI installed: $FRIDA_VER${NC}"
+    FRIDA_VER=$(frida --version 2>/dev/null)
+    if [ -n "$FRIDA_VER" ]; then
+        echo -e "${GREEN}✅ Frida CLI installed: $FRIDA_VER${NC}"
+    else
+        echo -e "${YELLOW}⚠️  Frida installed but version check failed${NC}"
+    fi
 else
-    echo "❌ Failed to install Frida CLI"
+    echo -e "${YELLOW}❌ Failed to install Frida CLI${NC}"
+    echo ""
+    echo "Try manual installation:"
+    echo "  npm cache clean --force"
+    echo "  npm install -g frida@16.5.6 --verbose"
     exit 1
 fi
 echo ""
@@ -60,11 +74,21 @@ echo -e "${BLUE}[5/5]${NC} Installing frida-server 16.5.6..."
 FRIDA_VER="16.5.6"
 cd ~
 
+# ลบไฟล์เก่า
+rm -f frida-server* 2>/dev/null
+
 # ดาวน์โหลด
+echo "[*] Downloading..."
 wget -q --show-progress \
   "https://github.com/frida/frida/releases/download/${FRIDA_VER}/frida-server-${FRIDA_VER}-android-${ARCH}.xz"
 
+if [ ! -f frida-server-*.xz ]; then
+    echo "❌ Download failed!"
+    exit 1
+fi
+
 # แตกไฟล์
+echo "[*] Extracting..."
 xz -d frida-server-*.xz
 mv frida-server-* frida-server
 chmod 755 frida-server
@@ -72,26 +96,28 @@ chmod 755 frida-server
 # Copy ไปมือถือ
 echo "[*] Installing to /data/local/tmp..."
 
-# ใช้ tsu หรือ su
 if command -v tsu &> /dev/null; then
-    tsu -c "pkill -9 frida-server" 2>/dev/null
-    tsu -c "cp $HOME/frida-server /data/local/tmp/"
-    tsu -c "chmod 755 /data/local/tmp/frida-server"
-    SERVER_VER=$(tsu -c "/data/local/tmp/frida-server --version")
+    ROOT_CMD="tsu -c"
 else
-    su -c "pkill -9 frida-server" 2>/dev/null
-    su -c "cp $HOME/frida-server /data/local/tmp/"
-    su -c "chmod 755 /data/local/tmp/frida-server"
-    SERVER_VER=$(su -c "/data/local/tmp/frida-server --version")
+    ROOT_CMD="su -c"
 fi
 
-echo -e "${GREEN}✅ frida-server installed: $SERVER_VER${NC}"
+$ROOT_CMD "pkill -9 frida-server" 2>/dev/null
+$ROOT_CMD "cp $HOME/frida-server /data/local/tmp/"
+$ROOT_CMD "chmod 755 /data/local/tmp/frida-server"
+
+SERVER_VER=$($ROOT_CMD "/data/local/tmp/frida-server --version" 2>/dev/null)
+
+if [ -n "$SERVER_VER" ]; then
+    echo -e "${GREEN}✅ frida-server installed: $SERVER_VER${NC}"
+else
+    echo -e "${YELLOW}⚠️  Server installed but version check needs root${NC}"
+fi
 echo ""
 
 # ==================== Create Helper Scripts ====================
 echo "[*] Creating helper scripts..."
 
-# start_frida.sh
 cat > ~/start_frida.sh << 'EOF'
 #!/data/data/com.termux/files/usr/bin/bash
 echo "🚀 Starting frida-server..."
@@ -100,96 +126,30 @@ echo "🚀 Starting frida-server..."
 tsu -c "pkill -9 frida-server" 2>/dev/null || su -c "pkill -9 frida-server" 2>/dev/null
 sleep 1
 
-# Disable SELinux (optional)
-tsu -c "setenforce 0" 2>/dev/null || su -c "setenforce 0" 2>/dev/null
-
 # Start server
 tsu -c "/data/local/tmp/frida-server -l 0.0.0.0:27042 -D" 2>/dev/null || \
 su -c "/data/local/tmp/frida-server -l 0.0.0.0:27042 -D" 2>/dev/null &
 
 sleep 2
 
-# Test connection
+# Test
 if frida-ps -H 127.0.0.1:27042 &>/dev/null; then
-    echo "✅ Server is running on port 27042"
-    echo ""
-    echo "Usage:"
-    echo "  frida-ps -H 127.0.0.1:27042"
-    echo "  frida -H 127.0.0.1:27042 -f com.example.app"
+    echo "✅ Server running on port 27042"
 else
-    echo "❌ Failed to start"
+    echo "❌ Failed to start (check root access)"
 fi
 EOF
 chmod 755 ~/start_frida.sh
 
-# stop_frida.sh
-cat > ~/stop_frida.sh << 'EOF'
-#!/data/data/com.termux/files/usr/bin/bash
-echo "🛑 Stopping frida-server..."
-tsu -c "pkill -9 frida-server" 2>/dev/null || su -c "pkill -9 frida-server" 2>/dev/null
-echo "✅ Stopped"
-EOF
-chmod 755 ~/stop_frida.sh
-
-# hook.sh
 cat > ~/hook.sh << 'EOF'
 #!/data/data/com.termux/files/usr/bin/bash
-if [ -z "$1" ]; then
-    echo "Usage: ./hook.sh <package_name> [script.js]"
-    echo ""
-    echo "Examples:"
-    echo "  ./hook.sh com.example.app"
-    echo "  ./hook.sh com.example.app script.js"
-    exit 1
-fi
-
-PKG="$1"
-SCRIPT="$2"
-
-if [ -n "$SCRIPT" ]; then
-    frida -H 127.0.0.1:27042 -f "$PKG" -l "$SCRIPT" --no-pause
-else
-    frida -H 127.0.0.1:27042 -f "$PKG"
-fi
+[ -z "$1" ] && echo "Usage: ./hook.sh <package> [script.js]" && exit 1
+frida -H 127.0.0.1:27042 -f "$1" ${2:+-l "$2"} --no-pause
 EOF
 chmod 755 ~/hook.sh
 
-echo -e "${GREEN}✅ Helper scripts created!${NC}"
-
-# ==================== Summary ====================
+echo -e "${GREEN}✅ Setup complete!${NC}"
 echo ""
-echo "╔═══════════════════════════════════════════════════════════╗"
-echo "║               ✅ Installation Complete!                   ║"
-echo "╚═══════════════════════════════════════════════════════════╝"
-echo ""
-echo "┌─────────────────────────────────────────────────┐"
-echo "│ 📋 Installed Versions                           │"
-echo "├─────────────────────────────────────────────────┤"
-echo "│ Frida CLI    : $FRIDA_VER                          │"
-echo "│ Frida Server : $SERVER_VER                          │"
-echo "│ Architecture : $ARCH                                │"
-echo "└─────────────────────────────────────────────────┘"
-echo ""
-echo "┌─────────────────────────────────────────────────┐"
-echo "│ 🚀 Quick Start                                   │"
-echo "├─────────────────────────────────────────────────┤"
-echo "│                                                 │"
-echo "│ 1. Start frida-server:                          │"
-echo "│    ~/start_frida.sh                             │"
-echo "│                                                 │"
-echo "│ 2. List processes:                              │"
-echo "│    frida-ps -H 127.0.0.1:27042                  │"
-echo "│                                                 │"
-echo "│ 3. Hook app:                                    │"
-echo "│    ~/hook.sh com.example.app script.js          │"
-echo "│                                                 │"
-echo "│    หรือ:                                         │"
-echo "│    frida -H 127.0.0.1:27042 -f com.app -l s.js  │"
-echo "│                                                 │"
-echo "│ 4. Stop server:                                 │"
-echo "│    ~/stop_frida.sh                              │"
-echo "│                                                 │"
-echo "└─────────────────────────────────────────────────┘"
-echo ""
-echo "💡 Note: No Python required! Using Node.js"
+echo "Start server: ~/start_frida.sh"
+echo "Hook app: ~/hook.sh com.example.app script.js"
 echo ""
