@@ -94,7 +94,7 @@ echo ""
 echo -e "${BLUE}[Step 5/7]${NC} Skipping Frida client install on Termux..."
 # ไม่ต้องอัปเดต pip ใน Termux เดี๋ยวมันงอแง
 # pip install --upgrade pip
-# pip install --upgrade frida frida-tools
+pip install --upgrade frida frida-tools
 
 # เซ็ตเวอร์ชัน Frida เอง (แก้เลขเวอร์ชันได้ตามใจ)
 # FRIDA_VER="16.5.6"
