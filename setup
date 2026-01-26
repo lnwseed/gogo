@@ -213,10 +213,12 @@ echo "[*] Starting frida-server..."
 
 # Kill existing
 tsu -c 'pkill -9 frida-server' 2>/dev/null || su -c 'pkill -9 frida-server' 2>/dev/null
+su -c 'pkill -9 frida-server' 2>/dev/null || su -c 'pkill -9 frida-server' 2>/dev/null
 sleep 1
 
 # Disable SELinux
 tsu -c 'setenforce 0' 2>/dev/null || su -c 'setenforce 0' 2>/dev/null
+su -c 'setenforce 0' 2>/dev/null || su -c 'setenforce 0' 2>/dev/null
 
 # Start server
 tsu -c '/data/local/tmp/frida-server -l 0.0.0.0:27042 -D' 2>/dev/null || \
